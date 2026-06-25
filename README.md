@@ -17,7 +17,7 @@ Read the full brief in [CHALLENGE.md](CHALLENGE.md).
 | `CHALLENGE.md` | The challenge: what to build, ideas, and judging criteria |
 | `CHALLENGE_AGREEMENT.md` | Terms for participating in the Cyanite challenge (accepted at registration) |
 | `data/` | The data pack (taste profiles + track display info) |
-| `docs/cyanite_tag_vocabularies.md` | The controlled vocabularies for Cyanite's tags (for building filters) |
+| `guides/` | Cyanite API guides: quick start, model outputs, and tag vocabularies |
 | `.env.sample` | Template for your Cyanite API key |
 | `LICENSE` | MIT, for the code and docs in this repo |
 | `DATA_LICENSE.md` | Terms for the data pack (Creative Commons music, pseudonymized profiles) |
@@ -30,11 +30,12 @@ Read the full brief in [CHALLENGE.md](CHALLENGE.md).
    cp .env.sample .env
    # then edit .env and set CYANITE_API_KEY
    ```
-3. Read [CHALLENGE.md](CHALLENGE.md) and skim [docs/cyanite_tag_vocabularies.md](docs/cyanite_tag_vocabularies.md).
+3. Read [CHALLENGE.md](CHALLENGE.md) and the [Cyanite API quick start](guides/quick_start.md); skim the [tag vocabularies](guides/tag_vocabularies.md).
 4. Explore `data/` (see below) and start querying the Cyanite API by track ID or text prompt.
 
-For the Cyanite API itself (authentication, search, fetching tags by track ID), refer
-to the Cyanite documentation provided at the event.
+For the Cyanite API itself (authentication, search, fetching tags by track ID), see the
+guides in [`guides/`](guides/): [quick start](guides/quick_start.md) and
+[model outputs](guides/model_outputs.md).
 
 ## The data pack
 
