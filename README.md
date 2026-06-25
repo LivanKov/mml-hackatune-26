@@ -68,6 +68,23 @@ Search returns ranked track IDs (free-text prompt search or similar-by-ID, with 
 filtering); you then fetch each result's tags from the Tagging API by track ID. There
 are no raw embeddings or vectors. See [CHALLENGE.md](CHALLENGE.md) for the full loop.
 
+## API usage and limits
+
+The API key is shared for the event and usage limits are **pooled across all teams**, so
+please cache results and fetch only what you use, so everyone has capacity for the full
+36 hours. Each action has a per-minute rate limit and an overall event quota:
+
+| Action | Rate limit (per minute) | Event quota (total) |
+|---|---|---|
+| Free-text search | 100 / min | 15,000 |
+| Similarity search | 100 / min | 15,000 |
+| Tagging / model outputs (per track) | 180 / min | 50,000 |
+
+- Exceeding a rate limit returns a rate-limit error; wait a few seconds and retry.
+- Exceeding an event quota stops further calls for that action for the rest of the event.
+- **Cache tags locally and fetch each track once.** A search returns up to 500 IDs; only tag the tracks your app actually surfaces, and avoid bulk-tagging the catalog.
+- Per the [Challenge Agreement](CHALLENGE_AGREEMENT.md), data and model outputs are for event use only: do not publish or redistribute them, and delete them after the event.
+
 ## Terms and licenses
 
 - Participating in the Cyanite challenge means accepting [CHALLENGE_AGREEMENT.md](CHALLENGE_AGREEMENT.md). Acceptance is recorded by Munich Music Labs at registration; the copy here is the reference text.
