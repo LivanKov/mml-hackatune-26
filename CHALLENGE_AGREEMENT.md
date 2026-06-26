@@ -1,7 +1,5 @@
 Cyanite Sponsor Challenge Agreement
 
-(Draft v2, 2026. Prepared for legal review.)
-
 This Sponsor Challenge Agreement ("Agreement") governs participation in the challenge provided by Cyanite (elceedee UG, haftungsbeschränkt) as part of HACKATUNE 2026. Acceptance of this Agreement is recorded through the Organizer's (Munich Music Labs e.V.) registration process before a participant begins work on the Cyanite challenge, and constitutes a binding agreement directly between the participant and Cyanite.
 
 By participating in the challenge provided by Cyanite, participants agree to the following terms:
