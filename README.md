@@ -45,8 +45,13 @@ is queryable.
 
 | File | Columns | Notes |
 |---|---|---|
-| `data/users.csv` | `user_id, liked_track_ids` | Pseudonymized user profiles (numeric IDs only). `liked_track_ids` is a space-separated list of in-catalog track IDs, e.g. `df["liked_track_ids"].str.split()` |
-| `data/tracks.csv` | `track_id, name, artist_name, duration` | Display info for the tracks referenced by the user profiles |
+| `data/users.csv` | `user_id, liked_track_ids` | Pseudonymized user profiles (numeric IDs only). `liked_track_ids` is a space-separated list of Jamendo track IDs, e.g. `df["liked_track_ids"].str.split()` |
+| `data/tracks.csv` | `track_id, cyanite_id, name, artist_name, duration` | Display info for the tracks referenced by the user profiles |
+
+**Two id spaces:** `track_id` is the **Jamendo** id (used for the audio URL and for joining
+`users.csv`); `cyanite_id` (`libtr_...`) is the id you pass to the **Cyanite API**. Join
+`users.csv` to `tracks.csv` on `track_id` to get the `cyanite_id` for a user's liked tracks.
+Every track in the pack has a `cyanite_id`.
 
 Use the user profiles as seeds for content-based taste profiles (the sound of what a
 user likes), not as collaborative-filtering / co-listening signals. See
