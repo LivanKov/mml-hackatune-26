@@ -25,21 +25,41 @@ be explainable.
 
 ## How the Cyanite API works (the core loop)
 
-1. Search returns a ranked list of track IDs + similarity scores (no metadata), via:
-- Free-text / prompt search: natural language → matching track IDs.
-- Similar-by-ID: a track already in the index → acoustically similar track IDs.
-- Both can be combined with filtering on Cyanite tags.
+Four endpoints (base URL `https://rest-api.cyanite.ai/v1`, auth header `x-api-key`):
 
-> Search is by track ID or text prompt only. No raw embeddings/vectors. Build
-> taste/personalization on IDs, prompts, and tags.
+1. **Search** returns a ranked list of results, each `{track, score}` where `score` is a
+   relevance/similarity value in 0 to 1. Three ways to search:
+   - **Find by text prompt**: natural language to matching tracks (`POST /private-alpha/library-tracks/search`).
+   - **Find similar (single seed)**: a track to acoustically similar tracks (`POST /private-alpha/library-tracks/{id}/similar`).
+   - **Find similar (multi-track, up to 10 seeds)**: similar to the mean of several tracks, e.g. a user's likes (`POST /private-alpha/library-tracks/similar`).
+   - All three accept an optional **`metadataFilter`** to restrict candidates before ranking (see below).
 
-2. Tagging. Search returns IDs, not metadata. To display or reason about a result,
-fetch its tags from the Tagging API by track ID:
+2. **Model outputs (tagging)**: search returns track ids/titles, not the analysis. To explain
+   or re-rank a result, fetch its tags from `GET /library-tracks/{id}/models?model=...`.
 
 ```
-query (text prompt OR seed track ID)  ->  ranked track IDs (+ scores)
-   -> fetch tags per ID (Tagging API)  ->  rank / explain / display
+search (prompt / seed id(s) [+ metadataFilter])  ->  ranked {track, score}
+   -> fetch model outputs per track id  ->  rank / explain / display
 ```
+
+> No raw embeddings/vectors are exposed. Build taste/personalization on track ids, prompts,
+> tags, and metadata filters.
+
+**Metadata filters.** Both search modes accept an optional `metadataFilter` to keep only tracks
+matching structured criteria, applied before ranking. It is a MongoDB-style filter keyed by the
+model-output field in **dot notation**, `"<ModelVersion>.<field>"`, where the field is `.tag`
+(single value), `.tags` (array; use `$in` / `$nin`), or `.scores.<tag>` (numeric per-tag score).
+Operators: `$gte $lte $gt $lt $eq $ne $in $nin $exists`, plus the logical `$and` / `$or`.
+
+```json
+{ "BpmV2.tag": { "$gte": 120, "$lte": 140 } }
+{ "MainGenreV2.tags": { "$in": ["rock", "pop"] } }
+{ "MoodSimpleV2.scores.energetic": { "$gte": 0.5 } }
+{ "$and": [ { "TempoV1.tag": { "$eq": "fast" } }, { "InstrumentsV2.tags": { "$in": ["piano"] } } ] }
+```
+
+Filter keys follow the model outputs (see guides/model_outputs.md); valid tag values are in
+guides/tag_vocabularies.md.
 
 Because everything is grounded in audio analysis, every recommendation can be explained in
 human terms ("shares the same calm, acoustic mood and a similar slow tempo").
@@ -161,7 +181,7 @@ interaction concept and a convincing, explainable demo beat feature count.
 
 | Resource | What it gives you |
 |---|---|
-| Cyanite search | Free-text/prompt + similar-by-ID → ranked track IDs + scores (no metadata, no embeddings) |
+| Cyanite search | Text prompt, similar-by-ID, and multi-track similarity → ranked tracks + relevance score, with optional metadata filters (no raw embeddings) |
 | Cyanite tagging | Per-track audio analysis fetched by track ID (genre, mood, instruments, character, BPM/tempo/key, valence/arousal, era, music-for, auto-description, representative segment, …) with scores + segments |
 | Catalog | ~362k tracks indexed in Cyanite (query by ID) |
 | Audio | Public MP3 per track at a deterministic URL, no API needed (see README) |

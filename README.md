@@ -17,8 +17,8 @@ Read the full brief in [CHALLENGE.md](CHALLENGE.md).
 | `CHALLENGE.md` | The challenge: what to build, ideas, and judging criteria |
 | `CHALLENGE_AGREEMENT.md` | Terms for participating in the Cyanite challenge (accepted at registration) |
 | `data/` | The data pack (taste profiles + track display info) |
-| `notebooks/` | Python starter notebook for the Cyanite API (model outputs; search to come) |
-| `guides/` | Cyanite reference: model outputs and tag vocabularies |
+| `notebooks/` | Python starter notebook: model outputs + search (text, similarity, multi-track) with audio |
+| `guides/` | Cyanite API guides (endpoint PDFs) + model outputs and tag-vocabulary reference |
 | `.env.sample` | Template for your Cyanite API key |
 | `LICENSE` | MIT, for the code and docs in this repo |
 | `DATA_LICENSE.md` | Terms for the data pack (Creative Commons music, pseudonymized profiles) |
@@ -34,9 +34,9 @@ Read the full brief in [CHALLENGE.md](CHALLENGE.md).
 3. Read [CHALLENGE.md](CHALLENGE.md), then open the starter notebook [`notebooks/cyanite_model_outputs.ipynb`](notebooks/cyanite_model_outputs.ipynb); skim the [tag vocabularies](guides/tag_vocabularies.md).
 4. Explore `data/` (see below) and start querying the Cyanite API by track ID or text prompt.
 
-For the Cyanite API (authentication, fetching tags by track ID), use the starter notebook
-[`notebooks/cyanite_model_outputs.ipynb`](notebooks/cyanite_model_outputs.ipynb) and the
-[model outputs reference](guides/model_outputs.md).
+For the Cyanite API, use the starter notebook
+[`notebooks/cyanite_model_outputs.ipynb`](notebooks/cyanite_model_outputs.ipynb) (covers all four
+endpoints) and the guides in [`guides/`](guides/) (endpoint PDFs, model outputs, tag vocabularies).
 
 ## The data pack
 
@@ -69,15 +69,39 @@ https://prod-1.storage.jamendo.com/download/track/391816/mp32/
 Replace `<track_id>` with the numeric ID (no API key needed). A small number of tracks
 that disallow download on Jamendo may not resolve.
 
-## Cyanite API in one line
+## The Cyanite API (four endpoints)
 
-Search returns ranked track IDs (free-text prompt search or similar-by-ID, with tag
-filtering); you then fetch each result's tags from the Tagging API by track ID. There
-are no raw embeddings or vectors. See [CHALLENGE.md](CHALLENGE.md) for the full loop.
+Base URL `https://rest-api.cyanite.ai/v1`, auth header `x-api-key: <your key>`. There are no raw
+embeddings or vectors; build on track ids, prompts, tags, and metadata filters.
 
-**Basics:** base URL `https://rest-api.cyanite.ai/v1`, auth header `x-api-key: <your key>`.
-Fetch a track's tags with `GET /library-tracks/{track_id}/models?model=MoodSimpleV2&model=MainGenreV2&...`
-(see the [starter notebook](notebooks/cyanite_model_outputs.ipynb) for a runnable example).
+- **Find by text prompt**: `POST /private-alpha/library-tracks/search`, body `{"query": "..."}`
+- **Find similar (single seed)**: `POST /private-alpha/library-tracks/{id}/similar`
+- **Find similar (multi-track, up to 10 seeds)**: `POST /private-alpha/library-tracks/similar`, body `{"tracks": [{"id": "libtr_..."}]}`
+- **Model outputs (tags)**: `GET /library-tracks/{id}/models?model=MoodSimpleV2&model=MainGenreV2&...`
+
+The three search endpoints return `{"items": [{"track": {...}, "score": 0..1}], "pageInfo": {...}}`
+ordered by relevance/similarity; fetch a result's tags via the model-outputs endpoint to explain it.
+
+**Metadata filters.** All search modes accept an optional `metadataFilter`, applied before
+ranking. It is a MongoDB-style filter keyed by the model-output field in **dot notation**,
+`"<ModelVersion>.<field>"`. Operators: `$gte $lte $gt $lt $eq $ne $in $nin $exists`, plus the
+logical `$and` / `$or`.
+
+```json
+{ "BpmV2.tag": { "$gte": 120, "$lte": 140 } }
+{ "TempoV1.tag": { "$eq": "fast" } }
+{ "MainGenreV2.tags": { "$in": ["rock", "pop"] } }
+{ "MoodSimpleV2.scores.energetic": { "$gte": 0.5 } }
+{ "$and": [ { "BpmV2.tag": { "$gte": 100 } }, { "InstrumentsV2.tags": { "$in": ["piano"] } } ] }
+```
+
+Filter keys follow the model-output fields: `.tag` (single value), `.tags` (array, use `$in` /
+`$nin`), or `.scores.<tag>` (numeric per-tag score). See [model outputs](guides/model_outputs.md)
+for the fields and [tag vocabularies](guides/tag_vocabularies.md) for valid tag values.
+
+See [CHALLENGE.md](CHALLENGE.md) for the loop and the
+[starter notebook](notebooks/cyanite_model_outputs.ipynb) for runnable examples.
+
 ## API usage and limits
 
 The API key is shared for the event and usage limits are **pooled across all teams**, so
