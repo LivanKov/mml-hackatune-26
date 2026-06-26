@@ -115,7 +115,7 @@ please cache results and fetch only what you use, so everyone has capacity for t
 
 | Action | Rate limit (per minute) | Event quota (total) |
 |---|---|---|
-| Free-text search | 100 / min | 15,000 |
+| Prompt search | 100 / min | 15,000 |
 | Similarity search | 100 / min | 15,000 |
 | Tagging / model outputs (per track) | 180 / min | 50,000 |
 
