@@ -111,7 +111,7 @@ analysis: Cyanite's tags/scores, the auto-description, or the prompt/filters you
 
 So you can focus on Cyanite, not on crawling Jamendo:
 
-- Catalog: ~362k tracks are indexed and queryable; any track ID returned by the API is in the catalog.
+- Catalog: ~357k tracks are indexed and queryable; any track ID returned by the API is in the catalog.
 - Audio: a public MP3 is available for any track at a deterministic URL (see the repo README), so you can get audio without any API or extra file.
 - Track display info: `track_id, name, artist, duration` for referenced tracks.
 - User profiles: real users with their liked tracks (use as seeds for content-based
@@ -183,7 +183,7 @@ interaction concept and a convincing, explainable demo beat feature count.
 |---|---|
 | Cyanite search | Text prompt, similar-by-ID, and multi-track similarity → ranked tracks + relevance score, with optional metadata filters (no raw embeddings) |
 | Cyanite tagging | Per-track audio analysis fetched by track ID (genre, mood, instruments, character, BPM/tempo/key, valence/arousal, era, music-for, auto-description, representative segment, …) with scores + segments |
-| Catalog | ~362k tracks indexed in Cyanite (query by ID) |
+| Catalog | ~357k tracks indexed in Cyanite (query by ID) |
 | Audio | Public MP3 per track at a deterministic URL, no API needed (see README) |
 | Data pack | Real user profiles + their liked tracks (CSV) as content-based taste seeds |
 | Jamendo public API | Optional extra live data |
