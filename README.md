@@ -4,7 +4,7 @@
 
 Build a music discovery experience on the Cyanite API that recommends tracks based on
 how they actually sound, driven by natural language, seed tracks, and a listener's
-taste, rather than by what other people listened to. Every recommendation should be
+taste. Every recommendation should be
 explainable, so a user can ask "why this track?" and get a clear answer grounded in
 Cyanite's audio tags.
 
@@ -40,7 +40,7 @@ endpoints) and the guides in [`guides/`](guides/) (endpoint PDFs, model outputs,
 
 ## The data pack
 
-Everything is restricted to tracks that are indexed in Cyanite, so any track ID you see
+Everything is restricted to a catalog of tracks that are indexed in Cyanite, so any track ID you see
 is queryable.
 
 | File | Columns | Notes |
@@ -62,6 +62,11 @@ user likes), not as collaborative-filtering / co-listening signals. See
 Audio is available as public MP3 for any track at a
 deterministic URL, so you can fetch audio for any catalog or search-result track ID:
 
+```js
+`https://prod-1.storage.jamendo.com/download/track/${trackId}/mp32/`
+```
+
+e.g., for track ID `391816`:
 ```
 https://prod-1.storage.jamendo.com/download/track/391816/mp32/
 ```
@@ -71,8 +76,8 @@ that disallow download on Jamendo may not resolve.
 
 ## The Cyanite API (four endpoints)
 
-Base URL `https://rest-api.cyanite.ai/v1`, auth header `x-api-key: <your key>`. There are no raw
-embeddings or vectors; build on track ids, prompts, tags, and metadata filters.
+Base URL `https://rest-api.cyanite.ai/v1`, auth header `x-api-key: <your key>`.
+Search for catalog tracks using track ids, prompts, tags, and metadata filters.
 
 - **Find by text prompt**: `POST /private-alpha/library-tracks/search`, body `{"query": "..."}`
 - **Find similar (single seed)**: `POST /private-alpha/library-tracks/{id}/similar`
