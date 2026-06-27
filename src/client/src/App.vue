@@ -12,37 +12,65 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { tracks } from "@/lib/tracks"
-import { users } from "@/lib/users"
+import { users, type User } from "@/lib/users"
 
-const selectedTrackId = ref(tracks[0]?.track_id ?? "")
+const tracksById = new Map(tracks.map((track) => [track.track_id, track]))
+
+const selectedUserId = ref(users[0]?.user_id ?? "")
 const listScrollTop = ref(0)
+const trackListRef = ref<HTMLElement | null>(null)
 
 const trackRowHeight = 60
 const overscanRows = 6
 const visibleRows = 18
 
-const selectedTrack = computed(
-  () => tracks.find((track) => track.track_id === selectedTrackId.value) ?? tracks[0],
+const selectedUser = computed(
+  () => users.find((user) => user.user_id === selectedUserId.value) ?? users[0],
 )
 
-const totalListHeight = computed(() => tracks.length * trackRowHeight)
+const likedTracks = computed(() => getLikedTracks(selectedUser.value))
+const selectedTrackId = ref(likedTracks.value[0]?.track_id ?? "")
+
+const selectedTrack = computed(
+  () =>
+    likedTracks.value.find((track) => track.track_id === selectedTrackId.value) ??
+    likedTracks.value[0],
+)
+
+const totalListHeight = computed(() => likedTracks.value.length * trackRowHeight)
 
 const firstVisibleIndex = computed(() =>
   Math.max(0, Math.floor(listScrollTop.value / trackRowHeight) - overscanRows),
 )
 
 const lastVisibleIndex = computed(() =>
-  Math.min(tracks.length, firstVisibleIndex.value + visibleRows + overscanRows * 2),
+  Math.min(likedTracks.value.length, firstVisibleIndex.value + visibleRows + overscanRows * 2),
 )
 
 const visibleTracks = computed(() =>
-  tracks.slice(firstVisibleIndex.value, lastVisibleIndex.value),
+  likedTracks.value.slice(firstVisibleIndex.value, lastVisibleIndex.value),
 )
 
 const visibleOffset = computed(() => firstVisibleIndex.value * trackRowHeight)
 
 function handleListScroll(event: Event) {
   listScrollTop.value = (event.currentTarget as HTMLElement).scrollTop
+}
+
+function getLikedTracks(user: User | undefined) {
+  return user?.liked_track_ids.flatMap((trackId) => {
+    const track = tracksById.get(trackId)
+    return track ? [track] : []
+  }) ?? []
+}
+
+function selectUser(user: User) {
+  selectedUserId.value = user.user_id
+  listScrollTop.value = 0
+  if (trackListRef.value) {
+    trackListRef.value.scrollTop = 0
+  }
+  selectedTrackId.value = getLikedTracks(user)[0]?.track_id ?? ""
 }
 
 function formatDuration(seconds: number) {
@@ -81,24 +109,34 @@ function formatDuration(seconds: number) {
           </div>
 
           <div class="min-h-0 flex-1 overflow-y-auto p-2">
-            <div
+            <Button
               v-for="user in users"
               :key="user.user_id"
-              class="flex h-11 items-center gap-3 rounded-md px-3 py-2"
+              type="button"
+              variant="ghost"
+              class="h-11 w-full justify-start gap-3 px-3 py-2 text-left"
+              :class="selectedUser?.user_id === user.user_id ? 'bg-accent text-accent-foreground' : ''"
+              @click="selectUser(user)"
             >
               <UserRound class="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
               <span class="min-w-0 truncate font-mono text-sm">{{ user.user_id }}</span>
-            </div>
+            </Button>
           </div>
         </section>
 
         <section class="flex h-[520px] min-h-0 flex-col rounded-lg border bg-card lg:h-full">
           <div class="border-b p-4">
             <h2 class="text-sm font-semibold">Track IDs</h2>
-            <p class="mt-1 text-sm text-muted-foreground">Click an ID to inspect the row.</p>
+            <p class="mt-1 truncate text-sm text-muted-foreground">
+              Liked by <span class="font-mono">{{ selectedUser?.user_id }}</span>
+            </p>
           </div>
 
-          <div class="min-h-0 flex-1 overflow-y-auto p-2" @scroll="handleListScroll">
+          <div
+            ref="trackListRef"
+            class="min-h-0 flex-1 overflow-y-auto p-2"
+            @scroll="handleListScroll"
+          >
             <div class="relative" :style="{ height: `${totalListHeight}px` }">
               <div
                 class="absolute left-0 right-0 top-0"

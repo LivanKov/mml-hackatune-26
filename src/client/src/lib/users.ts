@@ -2,6 +2,7 @@ import csv from "../../../../data/users.csv?raw"
 
 export interface User {
   user_id: string
+  liked_track_ids: string[]
 }
 
 function parseCsvLine(line: string) {
@@ -51,6 +52,7 @@ export function parseUsers(rawCsv: string): User[] {
 
       return {
         user_id: item.user_id,
+        liked_track_ids: item.liked_track_ids.trim().split(/\s+/).filter(Boolean),
       }
     })
 }
