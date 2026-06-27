@@ -1,130 +1,176 @@
 # Sounds Like You
 
-**Cyanite challenge for HACKATUNE 2026 (Munich Music Labs).**
+**Audio-based, explainable music discovery — built for HACKATUNE 2026 (Munich Music Labs × Cyanite).**
 
-Build a music discovery experience on the Cyanite API that recommends tracks based on
-how they actually sound, driven by natural language, seed tracks, and a listener's
-taste. Every recommendation should be
-explainable, so a user can ask "why this track?" and get a clear answer grounded in
-Cyanite's audio tags.
+> Select tracks you like → get acoustically similar recommendations → hear why they match → steer with natural language.
 
-Read the full brief in [CHALLENGE.md](CHALLENGE.md).
+---
 
-## What's in this repo
+## What it does
 
-| Path | What it is |
+Sounds Like You is a music recommendation app that works on *how tracks actually sound*, not metadata tags or listening history. You pick tracks you like, the app finds acoustically similar ones using Cyanite's audio AI, and an LLM explains each pick in one sentence.
+
+**Key flows:**
+
+1. **Taste seeding** — pick a user and select up to 10 of their liked tracks as seeds
+2. **Similar track discovery** — Cyanite's multi-track similarity API finds tracks that sound like the mean of your seeds
+3. **Audio preview** — play any track directly in the browser via Jamendo's public CDN (no sign-in)
+4. **AI explanations** — GPT writes one sentence per recommendation explaining the mood/genre/energy match
+5. **Natural language refinement** — type "but I want something more upbeat" and the search re-runs with that added to the query
+6. **Recommendation map** — an SVG visualization showing your seeds (center dot) and each recommendation (outer dots), colored by dominant mood, with arrows labeled by the biggest mood difference
+7. **Inferred AI models panel** — click any track to inspect all 23 Cyanite audio analysis outputs (genre, mood, BPM, instruments, valence/arousal, …)
+
+---
+
+## Architecture
+
+```
+Browser (Vue 3 + Vite)
+  │
+  ├── /api/*  →  Python Bottle server (src/api/app.py)
+  │                 ├── POST /api/similar-tracks   → Cyanite similarity search
+  │                 ├── POST /api/prompt-search    → Cyanite text prompt search
+  │                 ├── POST /api/track-summary    → OpenAI GPT explanations
+  │                 └── POST /api/refine-filter    → OpenAI → Cyanite metadata filter
+  │
+  ├── /cyanite/*  →  Cyanite REST API (model outputs, proxied by Vite)
+  │
+  └── Jamendo CDN  →  https://prod-1.storage.jamendo.com/download/track/{id}/mp32/
+                       (audio, no API key required)
+```
+
+**Frontend**: Vue 3, TypeScript, Vite, Tailwind CSS, shadcn/reka-ui components
+
+**Backend**: Python 3, Bottle (lightweight WSGI), no framework dependencies beyond that
+
+**AI / APIs**: Cyanite audio AI (similarity search + tagging), OpenAI GPT-5.5 (track explanations, filter generation)
+
+**Data**: ~357k Jamendo tracks indexed in Cyanite; local pack of 10,561 tracks with display info and 462 user taste profiles
+
+---
+
+## Setup
+
+### 1. Prerequisites
+
+- Python 3.10+
+- Node.js 18+
+- A Cyanite API key (issued by the HACKATUNE organizers)
+- An OpenAI API key (for AI-generated explanations)
+
+### 2. Environment
+
+```bash
+cp .env.sample .env
+# Edit .env:
+# CYANITE_API_KEY=<your key>
+# OPENAI_API_KEY=<your key>
+```
+
+### 3. Run
+
+```bash
+make run
+```
+
+This creates a Python venv, installs dependencies, and starts both the API server (port 8001) and the Vite dev server (port 5173) in parallel.
+
+Open [http://localhost:5173](http://localhost:5173).
+
+### 4. Development mode (with hot reload + debug logging)
+
+```bash
+make debug
+```
+
+---
+
+## Usage walkthrough
+
+### Pick a user and select seeds
+
+The left panel lists 462 pseudonymized users. Click one to load their liked tracks in the middle panel. Click tracks to select them as seeds (up to 10). Selected tracks show a checkmark and turn highlighted.
+
+### Find similar tracks
+
+Click **Find similar** in the right panel. The Cyanite API returns up to 10 tracks ranked by audio similarity to the mean of your seeds. A similarity score (0–1) appears on each result.
+
+### Preview audio
+
+Every track — liked or similar — has a play button. Click it to stream the MP3 from Jamendo. Click again to pause. Only one track plays at a time.
+
+### Read AI explanations
+
+After similar tracks load, GPT writes a one-sentence explanation per result explaining why it matches your seeds (mood, genre, energy, or style). These appear inline under each track title.
+
+### Refine with natural language
+
+Type in the **Refine** box (e.g. "but I want something darker" or "more acoustic") and press Enter or click Refine. The app appends your input to previous queries and re-runs the search with the combined prompt via Cyanite's text-prompt endpoint.
+
+### Recommendation Map
+
+When similar tracks are loaded, the map appears to the right. Your liked tracks form the center dot (colored by their dominant mood). Each recommended track orbits at the same radius, colored by its dominant mood. Arrows are labeled with the biggest mood difference between the seed cluster and that track (e.g. "more calm", "less energetic"). Hover a dot to see the track name, mood, and genre.
+
+### Inferred AI Models
+
+Click any track (liked or similar) to load its full Cyanite audio analysis in the panel at the bottom. 23 model outputs are shown as a JSON summary: genre, subgenre, mood, BPM, key, instruments, character, valence/arousal, era, music-for, and more.
+
+---
+
+## Project structure
+
+```
+├── src/
+│   ├── api/
+│   │   ├── app.py              # Bottle API server — Cyanite + OpenAI proxy
+│   │   └── requirements.txt
+│   └── client/
+│       └── src/
+│           ├── App.vue             # Main UI: users, liked tracks, similar tracks, map
+│           ├── components/
+│           │   ├── RecommendationMap.vue   # SVG mood map
+│           │   ├── mapUtils.ts             # Map geometry + diff-label logic
+│           │   └── cyaniteApi.ts           # Cyanite tagging calls (used by map)
+│           └── lib/
+│               ├── cyanite.ts      # Similarity search + model output fetching
+│               ├── openai.ts       # GPT explanation + filter generation calls
+│               ├── jamendo.ts      # Jamendo display-name fetching
+│               ├── tracks.ts       # Local track data (CSV parsed at build time)
+│               └── users.ts        # Local user data (CSV parsed at build time)
+├── data/
+│   ├── tracks.csv      # track_id, cyanite_id, name, artist_name, duration, license_ccurl
+│   └── users.csv       # user_id, liked_track_ids (space-separated Jamendo IDs)
+├── guides/             # Cyanite API endpoint guides + tag vocabulary reference
+├── Makefile            # run / debug targets
+└── .env.sample         # Environment variable template
+```
+
+---
+
+## Data notes
+
+Two ID spaces:
+
+| ID | Used for |
 |---|---|
-| `CHALLENGE.md` | The challenge: what to build, ideas, and judging criteria |
-| `CHALLENGE_AGREEMENT.md` | Terms for participating in the Cyanite challenge (accepted at registration) |
-| `data/` | The data pack (taste profiles + track display info) |
-| `notebooks/` | Python starter notebook: model outputs + search (text, similarity, multi-track) with audio |
-| `guides/` | Cyanite API guides (endpoint PDFs) + model outputs and tag-vocabulary reference |
-| `.env.sample` | Template for your Cyanite API key |
-| `LICENSE` | MIT, for the code and docs in this repo |
-| `DATA_LICENSE.md` | Terms for the data pack (Creative Commons music, pseudonymized profiles) |
+| `track_id` | Jamendo track ID — audio URL, joining `users.csv` to `tracks.csv` |
+| `cyanite_id` (`libtr_…`) | Cyanite API — similarity search, model outputs |
 
-## Getting started
-
-1. Clone this repo.
-2. Copy the env template and add your Cyanite API key (handed out by the organizers at the event):
-   ```bash
-   cp .env.sample .env
-   # then edit .env and set CYANITE_API_KEY
-   ```
-3. Read [CHALLENGE.md](CHALLENGE.md), then open the starter notebook [`notebooks/cyanite_model_outputs.ipynb`](notebooks/cyanite_model_outputs.ipynb); skim the [tag vocabularies](guides/tag_vocabularies.md).
-4. Explore `data/` (see below) and start querying the Cyanite API by track ID or text prompt.
-
-For the Cyanite API, use the starter notebook
-[`notebooks/cyanite_model_outputs.ipynb`](notebooks/cyanite_model_outputs.ipynb) (covers all four
-endpoints) and the guides in [`guides/`](guides/) (endpoint PDFs, model outputs, tag vocabularies).
-
-## The data pack
-
-Everything is restricted to a catalog of tracks that are indexed in Cyanite, so any track ID you see
-is queryable.
-
-| File | Columns | Notes |
-|---|---|---|
-| `data/users.csv` | `user_id, liked_track_ids` | Pseudonymized user profiles (numeric IDs only). `liked_track_ids` is a space-separated list of Jamendo track IDs, e.g. `df["liked_track_ids"].str.split()` |
-| `data/tracks.csv` | `track_id, cyanite_id, name, artist_name, duration` | Display info for the tracks referenced by the user profiles |
-
-**Two id spaces:** `track_id` is the **Jamendo** id (used for the audio URL and for joining
-`users.csv`); `cyanite_id` (`libtr_...`) is the id you pass to the **Cyanite API**. Join
-`users.csv` to `tracks.csv` on `track_id` to get the `cyanite_id` for a user's liked tracks.
-Every track in the pack has a `cyanite_id`.
-
-Use the user profiles as seeds for content-based taste profiles (the sound of what a
-user likes), not as collaborative-filtering / co-listening signals. See
-[DATA_LICENSE.md](DATA_LICENSE.md) for music attribution and data-use terms.
-
-### Audio
-
-Audio is available as public MP3 for any track at a
-deterministic URL, so you can fetch audio for any catalog or search-result track ID:
-
-```js
-`https://prod-1.storage.jamendo.com/download/track/${trackId}/mp32/`
+Audio URL (no API key needed):
+```
+https://prod-1.storage.jamendo.com/download/track/{track_id}/mp32/
 ```
 
-e.g., for track ID `391816`:
-```
-https://prod-1.storage.jamendo.com/download/track/391816/mp32/
-```
+The local data pack covers 10,561 tracks. The Cyanite catalog spans ~357k tracks — similar-track results may include tracks outside the local pack. When that happens, the app fetches display names from the Jamendo public API and shows the Jamendo track ID as a fallback.
 
-Replace `<track_id>` with the numeric ID (no API key needed). A small number of tracks
-that disallow download on Jamendo may not resolve.
+---
 
-## The Cyanite API (four endpoints)
+Both the backend (similarity/search) and the frontend (model outputs via Vite proxy) apply in-memory caches per session.
 
-Base URL `https://rest-api.cyanite.ai/v1`, auth header `x-api-key: <your key>`.
-Search for catalog tracks using track ids, prompts, tags, and metadata filters.
+---
 
-- **Find by text prompt**: `POST /private-alpha/library-tracks/search`, body `{"query": "..."}`
-- **Find similar (single seed)**: `POST /private-alpha/library-tracks/{id}/similar`
-- **Find similar (multi-track, up to 10 seeds)**: `POST /private-alpha/library-tracks/similar`, body `{"tracks": [{"id": "libtr_..."}]}`
-- **Model outputs (tags)**: `GET /library-tracks/{id}/models?model=MoodSimpleV2&model=MainGenreV2&...`
+## License
 
-The three search endpoints return `{"items": [{"track": {...}, "score": 0..1}], "pageInfo": {...}}`
-ordered by relevance/similarity; fetch a result's tags via the model-outputs endpoint to explain it.
-
-**Metadata filters.** All search modes accept an optional `metadataFilter`, applied before
-ranking. It is a MongoDB-style filter keyed by the model-output field in **dot notation**,
-`"<ModelVersion>.<field>"`. Operators: `$gte $lte $gt $lt $eq $ne $in $nin $exists`, plus the
-logical `$and` / `$or`.
-
-```json
-{ "BpmV2.tag": { "$gte": 120, "$lte": 140 } }
-{ "TempoV1.tag": { "$eq": "fast" } }
-{ "MainGenreV2.tags": { "$in": ["rock", "pop"] } }
-{ "MoodSimpleV2.scores.energetic": { "$gte": 0.5 } }
-{ "$and": [ { "BpmV2.tag": { "$gte": 100 } }, { "InstrumentsV2.tags": { "$in": ["piano"] } } ] }
-```
-
-Filter keys follow the model-output fields: `.tag` (single value), `.tags` (array, use `$in` /
-`$nin`), or `.scores.<tag>` (numeric per-tag score). See [model outputs](guides/model_outputs.md)
-for the fields and [tag vocabularies](guides/tag_vocabularies.md) for valid tag values.
-
-See [CHALLENGE.md](CHALLENGE.md) for the loop and the
-[starter notebook](notebooks/cyanite_model_outputs.ipynb) for runnable examples.
-
-## API usage and limits
-
-The API key is shared for the event and usage limits are **pooled across all teams**, so
-please cache results and fetch only what you use, so everyone has capacity for the full
-36 hours. Each action has a per-minute rate limit and an overall event quota:
-
-| Action | Rate limit (per minute) | Event quota (total) |
-|---|---|---|
-| Prompt search | 100 / min | 15,000 |
-| Similarity search | 100 / min | 15,000 |
-| Tagging / model outputs (per track) | 180 / min | 50,000 |
-
-- Exceeding a rate limit returns a rate-limit error; wait a few seconds and retry.
-- Exceeding an event quota stops further calls for that action for the rest of the event.
-- **Cache tags locally and fetch each track once.** A search returns up to 500 IDs; only tag the tracks your app actually surfaces, and avoid bulk-tagging the catalog.
-- Per the [Challenge Agreement](CHALLENGE_AGREEMENT.md), data and model outputs are for event use only: do not publish or redistribute them, and delete them after the event.
-
-## Terms and licenses
-
-- Participating in the Cyanite challenge means accepting [CHALLENGE_AGREEMENT.md](CHALLENGE_AGREEMENT.md). Acceptance is recorded by Munich Music Labs at registration; the copy here is the reference text.
-- Code and docs: MIT ([LICENSE](LICENSE)). Data pack: see [DATA_LICENSE.md](DATA_LICENSE.md).
+Code and docs: MIT ([LICENSE](LICENSE)).
+Data pack: see [DATA_LICENSE.md](DATA_LICENSE.md) — Creative Commons music, pseudonymized profiles, event-use only.
+Cyanite API data and model outputs: [CHALLENGE_AGREEMENT.md](CHALLENGE_AGREEMENT.md)
