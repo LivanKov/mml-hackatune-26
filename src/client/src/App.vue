@@ -12,6 +12,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { tracks } from "@/lib/tracks"
+import RecommendationMap from "@/components/RecommendationMap.vue"
 
 const selectedTrackId = ref(tracks[0]?.track_id ?? "")
 const listScrollTop = ref(0)
@@ -54,7 +55,7 @@ function formatDuration(seconds: number) {
 
 <template>
   <main class="min-h-screen bg-background">
-    <div class="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-4 py-6 sm:px-6 lg:px-8">
+    <div class="mx-auto flex w-full max-w-7xl flex-col px-4 py-6 sm:px-6 lg:px-8">
       <header class="mb-6 flex flex-col gap-3 border-b pb-5 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <div class="mb-2 flex items-center gap-2 text-sm font-medium text-muted-foreground">
@@ -68,8 +69,8 @@ function formatDuration(seconds: number) {
         </Badge>
       </header>
 
-      <div class="grid min-h-0 flex-1 gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
-        <section class="flex h-[520px] min-h-0 flex-col rounded-lg border bg-card lg:h-full">
+      <div class="grid min-h-0 gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+        <section class="flex h-[520px] min-h-0 flex-col rounded-lg border bg-card">
           <div class="border-b p-4">
             <h2 class="text-sm font-semibold">Track IDs</h2>
             <p class="mt-1 text-sm text-muted-foreground">Click an ID to inspect the row.</p>
@@ -166,6 +167,8 @@ function formatDuration(seconds: number) {
           </Card>
         </section>
       </div>
+
+      <RecommendationMap :cyanite-id="selectedTrack?.cyanite_id ?? null" />
     </div>
   </main>
 </template>
