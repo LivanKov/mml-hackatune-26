@@ -336,10 +336,14 @@ def similar_tracks() -> HTTPResponse:
         payload = get_json_body()
         track_ids = parse_track_ids(payload)
         limit = parse_limit(payload)
+        body: dict[str, Any] = {"tracks": [{"id": track_id} for track_id in track_ids]}
+        metadata_filter = payload.get("metadataFilter")
+        if isinstance(metadata_filter, dict) and metadata_filter:
+            body["metadataFilter"] = metadata_filter
         status_code, cyanite_data = post_cyanite_json(
             "/private-alpha/library-tracks/similar",
             {"limit": limit},
-            {"tracks": [{"id": track_id} for track_id in track_ids]},
+            body,
         )
 
         if status_code < 200 or status_code >= 300:
@@ -378,6 +382,80 @@ def openai_test() -> HTTPResponse:
             "result": result,
             "usage": openai_data.get("usage") if isinstance(openai_data, dict) else None,
         })
+    except ApiError as error:
+        return json_response({"error": error.message}, error.status_code)
+
+
+FILTER_FIELD_DOCS = """
+Available metadata filter fields (MongoDB-style operators: $gte, $lte, $eq, $in):
+- MoodSimpleV2.scores.<mood>  (0–1)  moods: energetic, dark, chill, happy, sad, calm, epic, uplifting, scary, romantic, aggressive, sexy, ethereal
+- ValenceArousalV2.valence    (-1 to 1, negative=sad, positive=happy)
+- ValenceArousalV2.arousal    (-1 to 1, low=calm, high=energetic)
+- BpmV2.value                 (beats per minute, e.g. 120)
+
+Example: { "MoodSimpleV2.scores.energetic": { "$gte": 0.6 }, "BpmV2.value": { "$gte": 120 } }
+""".strip()
+
+
+@app.post("/api/refine-filter")
+def refine_filter() -> HTTPResponse:
+    try:
+        payload = get_json_body()
+        user_message = payload.get("userMessage", "").strip()
+        seed_summaries = payload.get("seedSummaries", [])
+        current_summaries = payload.get("currentSummaries", [])
+
+        if not user_message:
+            raise ApiError(400, "userMessage is required.")
+
+        openai_payload = {
+            "model": MODEL,
+            "reasoning": {"effort": REASONING_EFFORT},
+            "instructions": (
+                "You are a music search assistant. Convert the user's natural language preference "
+                "into a Cyanite metadata filter JSON. Return only valid JSON for the filter field."
+            ),
+            "input": (
+                f"{FILTER_FIELD_DOCS}\n\n"
+                f"Seed track audio profiles: {json.dumps(seed_summaries)}\n"
+                f"Current recommended track profiles: {json.dumps(current_summaries)}\n\n"
+                f"User request: \"{user_message}\"\n\n"
+                "Return a filterJson string (JSON-encoded filter object) and a short reasoning."
+            ),
+            "text": {
+                "verbosity": TEXT_VERBOSITY,
+                "format": {
+                    "type": "json_schema",
+                    "name": "refine_filter",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "filterJson": {"type": "string"},
+                            "reasoning": {"type": "string"},
+                        },
+                        "required": ["filterJson", "reasoning"],
+                    },
+                },
+            },
+        }
+
+        status_code, openai_data = post_openai_json("/responses", openai_payload)
+        if status_code < 200 or status_code >= 300:
+            return json_response({"error": "OpenAI API request failed.", "details": openai_data}, status_code)
+
+        output_text = extract_openai_output_text(openai_data)
+        if not output_text:
+            raise ApiError(502, "OpenAI response did not include output text.")
+
+        result = json.loads(output_text)
+        try:
+            metadata_filter = json.loads(result["filterJson"])
+        except (json.JSONDecodeError, KeyError) as error:
+            raise ApiError(502, "OpenAI returned an invalid filter.") from error
+
+        return json_response({"filter": metadata_filter, "reasoning": result.get("reasoning", "")})
     except ApiError as error:
         return json_response({"error": error.message}, error.status_code)
 

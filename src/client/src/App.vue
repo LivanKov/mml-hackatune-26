@@ -7,9 +7,10 @@ import {
   Clock,
   Disc3,
   ExternalLink,
-  Hash,
   Loader2,
   Music2,
+  Pause,
+  Play,
   Sparkles,
   UserRound,
 } from "lucide-vue-next"
@@ -29,8 +30,10 @@ import {
   getLibraryTrackModels,
   type SimilarTrackItem,
 } from "@/lib/cyanite"
+import { fetchJamendoTracks, type JamendoTrack } from "@/lib/jamendo"
 import {
   generateSimilarTrackSummary,
+  refineToFilter,
   testOpenAiStructuredOutput,
   type OpenAiStructuredTestResponse,
   type TrackExplanation,
@@ -64,9 +67,57 @@ const modelOutputJson = ref("")
 const modelOutputError = ref("")
 const isFetchingModelOutput = ref(false)
 let modelOutputRequestId = 0
-const trackExplanations = ref<TrackExplanation[]>([])
-const summaryError = ref("")
-const isGeneratingSummary = ref(false)
+interface ChatMessage {
+  role: "assistant" | "user"
+  text: string
+  filter?: Record<string, unknown>
+}
+
+const chatMessages = ref<ChatMessage[]>([])
+const chatInput = ref("")
+const isChatLoading = ref(false)
+const chatError = ref("")
+const currentFilter = ref<Record<string, unknown> | null>(null)
+let currentSeedSummaries: Record<string, unknown>[] = []
+
+const playingJamendoId = ref<string | null>(null)
+let audioEl: HTMLAudioElement | null = null
+const jamendoNames = ref<Map<string, JamendoTrack>>(new Map())
+
+function toggleAudio(jamendoTrackId: string, event: MouseEvent) {
+  event.stopPropagation()
+  if (playingJamendoId.value === jamendoTrackId) {
+    audioEl?.pause()
+    playingJamendoId.value = null
+    return
+  }
+  if (audioEl) {
+    audioEl.pause()
+    audioEl = null
+  }
+  playingJamendoId.value = jamendoTrackId
+  audioEl = new Audio(`https://prod-1.storage.jamendo.com/download/track/${jamendoTrackId}/mp32/`)
+  audioEl.addEventListener("ended", () => { playingJamendoId.value = null })
+  audioEl.play().catch(() => { playingJamendoId.value = null })
+}
+
+function handleSimilarPlayClick(item: SimilarTrackItem, event: MouseEvent) {
+  event.stopPropagation()
+  const jamendoId = getSimilarTrackJamendoId(item)
+  if (jamendoId) toggleAudio(jamendoId, event)
+}
+
+async function enrichSimilarTrackNames(items: SimilarTrackItem[]) {
+  const ids = items
+    .filter((item) => !getSimilarTrackLocalMatch(item))
+    .map((item) => getSimilarTrackJamendoId(item))
+    .filter((id): id is string => id !== null)
+  if (ids.length === 0) return
+  const fetched = await fetchJamendoTracks(ids)
+  if (fetched.size > 0) {
+    jamendoNames.value = new Map([...jamendoNames.value, ...fetched])
+  }
+}
 
 const trackRowHeight = 60
 const overscanRows = 6
@@ -133,8 +184,12 @@ function selectUser(user: User) {
   selectedSeedTrackIds.value = []
   similarTracks.value = []
   similarError.value = ""
-  trackExplanations.value = []
-  summaryError.value = ""
+  chatMessages.value = []
+  chatError.value = ""
+  currentFilter.value = null
+  currentSeedSummaries = []
+  if (audioEl) { audioEl.pause(); audioEl = null }
+  playingJamendoId.value = null
   clearModelOutput()
 }
 
@@ -162,16 +217,33 @@ function toggleSeedTrack(trackId: string) {
   similarError.value = ""
 }
 
+function getSimilarTrackJamendoId(item: SimilarTrackItem): string | null {
+  const match = item.track.title?.match(/^(\d+)\.mp3$/i)
+  return match ? match[1] : null
+}
+
 function getSimilarTrackLocalMatch(item: SimilarTrackItem) {
-  return tracksByCyaniteId.get(item.track.id)
+  const byCyanite = tracksByCyaniteId.get(item.track.id)
+  if (byCyanite) return byCyanite
+  const jamendoId = getSimilarTrackJamendoId(item)
+  if (jamendoId) return tracksById.get(jamendoId)
+  return undefined
 }
 
 function getSimilarTrackTitle(item: SimilarTrackItem) {
-  return getSimilarTrackLocalMatch(item)?.name ?? item.track.title ?? item.track.id
+  const local = getSimilarTrackLocalMatch(item)
+  if (local) return local.name
+  const jamendoId = getSimilarTrackJamendoId(item)
+  if (jamendoId) return jamendoNames.value.get(jamendoId)?.name ?? jamendoId
+  return item.track.id
 }
 
 function getSimilarTrackArtist(item: SimilarTrackItem) {
-  return getSimilarTrackLocalMatch(item)?.artist_name ?? "Cyanite library track"
+  const local = getSimilarTrackLocalMatch(item)
+  if (local) return local.artist_name
+  const jamendoId = getSimilarTrackJamendoId(item)
+  if (jamendoId) return jamendoNames.value.get(jamendoId)?.artistName ?? ""
+  return ""
 }
 
 function summarizeModelOutputs(data: unknown): Record<string, unknown> {
@@ -271,13 +343,21 @@ function selectSimilarTrack(item: SimilarTrackItem) {
   })
 }
 
+function formatExplanations(explanations: TrackExplanation[], similar: typeof similarTracks.value): string {
+  return explanations.map((exp, i) => {
+    const track = similar.find((t) => t.track.id === exp.id)
+    const title = track ? getSimilarTrackTitle(track) : exp.id
+    return `${i + 1}. ${title} — ${exp.explanation}`
+  }).join("\n")
+}
+
 async function generateSummary() {
   const seeds = selectedSeedTracks.value
   const similar = similarTracks.value
   if (!seeds.length || !similar.length) return
 
-  isGeneratingSummary.value = true
-  summaryError.value = ""
+  isChatLoading.value = true
+  chatError.value = ""
 
   try {
     const [seedOutputs, similarOutputs] = await Promise.all([
@@ -285,9 +365,7 @@ async function generateSummary() {
       Promise.all(similar.map((item) => getLibraryTrackModels(item.track.id).catch(() => null))),
     ])
 
-    const seedSummaries = seedOutputs
-      .filter(Boolean)
-      .map((data) => summarizeModelOutputs(data))
+    currentSeedSummaries = seedOutputs.filter(Boolean).map((data) => summarizeModelOutputs(data))
 
     const tracks = similar.map((item, i) => ({
       id: item.track.id,
@@ -296,12 +374,44 @@ async function generateSummary() {
       summary: similarOutputs[i] ? summarizeModelOutputs(similarOutputs[i]) : {},
     }))
 
-    const result = await generateSimilarTrackSummary(seedSummaries, tracks)
-    trackExplanations.value = result.explanations
+    const result = await generateSimilarTrackSummary(currentSeedSummaries, tracks)
+    chatMessages.value.push({
+      role: "assistant",
+      text: formatExplanations(result.explanations, similar),
+    })
   } catch (error) {
-    summaryError.value = error instanceof Error ? error.message : "Could not generate summary."
+    chatError.value = error instanceof Error ? error.message : "Could not generate summary."
   } finally {
-    isGeneratingSummary.value = false
+    isChatLoading.value = false
+  }
+}
+
+async function sendChatMessage() {
+  const message = chatInput.value.trim()
+  if (!message || isChatLoading.value) return
+
+  chatInput.value = ""
+  chatMessages.value.push({ role: "user", text: message })
+  isChatLoading.value = true
+  chatError.value = ""
+
+  try {
+    const currentSummaries = similarTracks.value.map((item) => ({}))
+    const { filter, reasoning } = await refineToFilter(message, currentSeedSummaries, currentSummaries)
+    currentFilter.value = filter
+    chatMessages.value.push({ role: "assistant", text: reasoning, filter })
+
+    const result = await findSimilarLibraryTracks(
+      selectedSeedTracks.value.map((t) => t.cyanite_id),
+      10,
+      filter,
+    )
+    similarTracks.value = result.items ?? []
+    void enrichSimilarTrackNames(similarTracks.value)
+    await generateSummary()
+  } catch (error) {
+    chatError.value = error instanceof Error ? error.message : "Could not process request."
+    isChatLoading.value = false
   }
 }
 
@@ -312,8 +422,9 @@ async function fetchSimilarTracks() {
 
   isFindingSimilar.value = true
   similarError.value = ""
-  trackExplanations.value = []
-  summaryError.value = ""
+  chatMessages.value = []
+  chatError.value = ""
+  currentFilter.value = null
 
   try {
     const result = await findSimilarLibraryTracks(
@@ -321,6 +432,7 @@ async function fetchSimilarTracks() {
       10,
     )
     similarTracks.value = result.items ?? []
+    void enrichSimilarTrackNames(similarTracks.value)
     void generateSummary()
   } catch (error) {
     similarError.value = error instanceof Error ? error.message : "Could not fetch similar tracks."
@@ -398,7 +510,7 @@ function formatDuration(seconds: number) {
         <section class="flex h-[520px] min-h-0 flex-col rounded-lg border bg-card lg:h-full">
           <div class="flex items-start justify-between gap-3 border-b p-4">
             <div class="min-w-0">
-              <h2 class="text-sm font-semibold">Liked Track IDs</h2>
+              <h2 class="text-sm font-semibold">Liked Tracks</h2>
               <p class="mt-1 truncate text-sm text-muted-foreground">
                 Liked by <span class="font-mono">{{ selectedUser?.user_id }}</span>
               </p>
@@ -421,14 +533,23 @@ function formatDuration(seconds: number) {
                 <div
                   v-for="track in visibleTracks"
                   :key="track.track_id"
-                  class="pb-1"
+                  class="flex items-center gap-1 pb-1"
                   :style="{ height: `${trackRowHeight}px` }"
                 >
+                  <button
+                    type="button"
+                    class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border bg-background text-foreground shadow-sm transition-colors hover:bg-primary hover:text-primary-foreground"
+                    :aria-label="playingJamendoId === track.track_id ? 'Pause' : 'Play'"
+                    @click="toggleAudio(track.track_id, $event)"
+                  >
+                    <Pause v-if="playingJamendoId === track.track_id" class="h-3.5 w-3.5" aria-hidden="true" />
+                    <Play v-else class="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
                   <Button
                     type="button"
                     variant="ghost"
                     :aria-pressed="isTrackSelected(track.track_id)"
-                    class="h-full w-full justify-start gap-3 px-3 py-2 text-left"
+                    class="h-full min-w-0 flex-1 justify-start gap-3 px-3 py-2 text-left"
                     :class="[
                       isTrackSelected(track.track_id)
                         ? 'bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground'
@@ -443,24 +564,23 @@ function formatDuration(seconds: number) {
                       class="flex h-5 w-5 shrink-0 items-center justify-center rounded border"
                       :class="isTrackSelected(track.track_id)
                         ? 'border-primary-foreground bg-primary-foreground text-primary'
-                        : 'border-border text-muted-foreground'"
+                        : 'border-border'"
                     >
                       <Check
                         v-if="isTrackSelected(track.track_id)"
                         class="h-3.5 w-3.5"
                         aria-hidden="true"
                       />
-                      <Hash v-else class="h-3.5 w-3.5" aria-hidden="true" />
                     </span>
                     <span class="min-w-0">
-                      <span class="block truncate font-mono text-sm">{{ track.track_id }}</span>
+                      <span class="block truncate text-sm font-medium">{{ track.name }}</span>
                       <span
                         class="block truncate text-xs font-normal"
                         :class="isTrackSelected(track.track_id)
                           ? 'text-primary-foreground/80'
                           : 'text-muted-foreground'"
                       >
-                        {{ track.name }}
+                        {{ track.artist_name }}
                       </span>
                     </span>
                   </Button>
@@ -530,37 +650,67 @@ function formatDuration(seconds: number) {
               </div>
 
               <section
-                v-if="trackExplanations.length || isGeneratingSummary || summaryError"
+                v-if="chatMessages.length || isChatLoading || chatError"
                 class="space-y-3"
               >
-                <h2 class="text-sm font-semibold">Why these tracks match</h2>
+                <h2 class="text-sm font-semibold">Chat</h2>
 
                 <div
-                  v-if="summaryError"
+                  v-if="chatError"
                   class="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
                 >
                   <AlertCircle class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-                  <span>{{ summaryError }}</span>
+                  <span>{{ chatError }}</span>
                 </div>
 
-                <div
-                  v-if="isGeneratingSummary"
-                  class="flex min-h-20 items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground"
-                >
-                  <Loader2 class="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
-                  Generating summary
-                </div>
-
-                <ul v-else-if="trackExplanations.length" class="space-y-2">
-                  <li
-                    v-for="exp in trackExplanations"
-                    :key="exp.id"
-                    class="rounded-md border p-3"
+                <div class="flex max-h-96 flex-col gap-2 overflow-y-auto rounded-md border p-3">
+                  <div
+                    v-for="(msg, i) in chatMessages"
+                    :key="i"
+                    class="flex gap-2"
+                    :class="msg.role === 'user' ? 'justify-end' : 'justify-start'"
                   >
-                    <div class="truncate font-mono text-xs text-muted-foreground">{{ exp.id }}</div>
-                    <p class="mt-1 text-sm">{{ exp.explanation }}</p>
-                  </li>
-                </ul>
+                    <div
+                      class="max-w-[85%] space-y-1 rounded-lg px-3 py-2 text-sm whitespace-pre-line"
+                      :class="msg.role === 'user'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-muted text-foreground'"
+                    >
+                      {{ msg.text }}
+                      <pre
+                        v-if="msg.filter"
+                        class="mt-1 overflow-x-auto rounded border bg-background/60 p-2 font-mono text-xs text-foreground"
+                      >{{ JSON.stringify(msg.filter, null, 2) }}</pre>
+                    </div>
+                  </div>
+
+                  <div v-if="isChatLoading" class="flex justify-start">
+                    <div class="flex items-center gap-2 rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
+                      <Loader2 class="h-3 w-3 animate-spin" aria-hidden="true" />
+                      Thinking
+                    </div>
+                  </div>
+                </div>
+
+                <div class="flex gap-2">
+                  <input
+                    v-model="chatInput"
+                    type="text"
+                    placeholder="e.g. but I want more energetic songs…"
+                    class="flex-1 rounded-md border bg-background px-3 py-2 text-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring"
+                    :disabled="isChatLoading"
+                    @keydown.enter="sendChatMessage"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    class="shrink-0"
+                    :disabled="!chatInput.trim() || isChatLoading"
+                    @click="sendChatMessage"
+                  >
+                    Send
+                  </Button>
+                </div>
               </section>
 
               <section class="space-y-3">
@@ -580,35 +730,46 @@ function formatDuration(seconds: number) {
                 </div>
 
                 <div v-else-if="similarTracks.length" class="divide-y rounded-md border">
-                  <button
+                  <div
                     v-for="item in similarTracks"
                     :key="item.track.id"
-                    type="button"
-                    class="block w-full p-3 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
+                    role="button"
+                    tabindex="0"
+                    class="flex cursor-pointer items-start gap-3 p-3 transition-colors hover:bg-accent hover:text-accent-foreground"
                     :class="selectedModelOutputTarget?.id === item.track.id ? 'bg-accent text-accent-foreground' : ''"
                     @click="selectSimilarTrack(item)"
+                    @keydown.enter="selectSimilarTrack(item)"
                   >
-                    <div class="flex items-start justify-between gap-3">
-                      <div class="min-w-0">
-                        <div class="truncate text-sm font-medium">
-                          {{ getSimilarTrackTitle(item) }}
+                    <button
+                      type="button"
+                      class="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border bg-background text-foreground shadow-sm transition-colors hover:bg-primary hover:text-primary-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                      :aria-label="playingJamendoId === getSimilarTrackJamendoId(item) ? 'Pause' : 'Play'"
+                      :disabled="!getSimilarTrackJamendoId(item)"
+                      @click.stop="handleSimilarPlayClick(item, $event)"
+                    >
+                      <Pause v-if="getSimilarTrackJamendoId(item) && playingJamendoId === getSimilarTrackJamendoId(item)" class="h-3.5 w-3.5" aria-hidden="true" />
+                      <Play v-else class="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                    <div class="min-w-0 flex-1">
+                      <div class="flex items-start justify-between gap-3">
+                        <div class="min-w-0">
+                          <div class="truncate text-sm font-medium">
+                            {{ getSimilarTrackTitle(item) }}
+                          </div>
+                          <div v-if="getSimilarTrackArtist(item)" class="mt-1 truncate text-xs text-muted-foreground">
+                            {{ getSimilarTrackArtist(item) }}
+                          </div>
                         </div>
-                        <div class="mt-1 truncate text-xs text-muted-foreground">
-                          {{ getSimilarTrackArtist(item) }}
-                        </div>
+                        <Badge
+                          v-if="typeof item.score === 'number'"
+                          variant="outline"
+                          class="shrink-0 font-mono"
+                        >
+                          {{ item.score.toFixed(3) }}
+                        </Badge>
                       </div>
-                      <Badge
-                        v-if="typeof item.score === 'number'"
-                        variant="outline"
-                        class="shrink-0 font-mono"
-                      >
-                        {{ item.score.toFixed(3) }}
-                      </Badge>
                     </div>
-                    <div class="mt-2 truncate font-mono text-xs text-muted-foreground">
-                      {{ item.track.id }}
-                    </div>
-                  </button>
+                  </div>
                 </div>
 
                 <div

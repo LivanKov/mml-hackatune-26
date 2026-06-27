@@ -73,13 +73,22 @@ function getErrorMessage(payload: unknown, fallback: string) {
   return fallback
 }
 
-export async function findSimilarLibraryTracks(trackIds: string[], limit = 20) {
+export async function findSimilarLibraryTracks(
+  trackIds: string[],
+  limit = 20,
+  metadataFilter?: Record<string, unknown>,
+) {
   const seedIds = trackIds.slice(0, 10)
-  const cacheKey = `${limit}:${seedIds.join("|")}`
+  const cacheKey = `${limit}:${seedIds.join("|")}:${JSON.stringify(metadataFilter ?? {})}`
   const cached = similarTracksCache.get(cacheKey)
 
   if (cached) {
     return cached
+  }
+
+  const body: Record<string, unknown> = { trackIds: seedIds, limit }
+  if (metadataFilter && Object.keys(metadataFilter).length > 0) {
+    body.metadataFilter = metadataFilter
   }
 
   const response = await fetch("/api/similar-tracks", {
@@ -87,7 +96,7 @@ export async function findSimilarLibraryTracks(trackIds: string[], limit = 20) {
     headers: {
       "content-type": "application/json",
     },
-    body: JSON.stringify({ trackIds: seedIds, limit }),
+    body: JSON.stringify(body),
   })
 
   if (!response.ok) {

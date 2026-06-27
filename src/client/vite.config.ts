@@ -23,6 +23,11 @@ export default defineConfig(({ mode }) => {
       headers: cyaniteApiKey ? { "x-api-key": cyaniteApiKey } : {},
       rewrite: (requestPath: string) => requestPath.replace(/^\/cyanite/, ""),
     },
+    "/jamendo": {
+      target: "https://api.jamendo.com",
+      changeOrigin: true,
+      rewrite: (requestPath: string) => requestPath.replace(/^\/jamendo/, ""),
+    },
   }
 
   return {

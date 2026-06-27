@@ -34,6 +34,25 @@ export async function generateSimilarTrackSummary(
   return await response.json() as { explanations: TrackExplanation[] }
 }
 
+export async function refineToFilter(
+  userMessage: string,
+  seedSummaries: Record<string, unknown>[],
+  currentSummaries: Record<string, unknown>[],
+): Promise<{ filter: Record<string, unknown>; reasoning: string }> {
+  const response = await fetch("/api/refine-filter", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ userMessage, seedSummaries, currentSummaries }),
+  })
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => null) as { error?: string } | null
+    throw new Error(error?.error ?? "Could not refine filter.")
+  }
+
+  return await response.json() as { filter: Record<string, unknown>; reasoning: string }
+}
+
 export async function testOpenAiStructuredOutput() {
   const response = await fetch("/api/openai-test", {
     method: "POST",
