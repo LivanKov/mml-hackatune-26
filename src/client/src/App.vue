@@ -2,7 +2,6 @@
 import { computed, ref } from "vue"
 import {
   AlertCircle,
-  Braces,
   Check,
   Clock,
   Disc3,
@@ -34,8 +33,6 @@ import {
 import { fetchJamendoTracks, type JamendoTrack } from "@/lib/jamendo"
 import {
   generateSimilarTrackSummary,
-  testOpenAiStructuredOutput,
-  type OpenAiStructuredTestResponse,
   type TrackExplanation,
 } from "@/lib/openai"
 import { tracks, type Track } from "@/lib/tracks"
@@ -60,9 +57,6 @@ const selectedSeedTrackIds = ref<string[]>([])
 const similarTracks = ref<SimilarTrackItem[]>([])
 const similarError = ref("")
 const isFindingSimilar = ref(false)
-const openAiTest = ref<OpenAiStructuredTestResponse | null>(null)
-const openAiTestError = ref("")
-const isTestingOpenAi = ref(false)
 const selectedModelOutputTarget = ref<ModelOutputTarget | null>(null)
 const modelOutputJson = ref("")
 const modelOutputError = ref("")
@@ -83,6 +77,7 @@ let currentSeedSummaries: Record<string, unknown>[] = []
 const promptHistory = ref<string[]>([])
 
 const trackColorMap = ref<Record<string, string>>({})
+const hoveredTrackId = ref<string | null>(null)
 const playingJamendoId = ref<string | null>(null)
 let audioEl: HTMLAudioElement | null = null
 const jamendoNames = ref<Map<string, JamendoTrack>>(new Map())
@@ -450,20 +445,6 @@ async function fetchSimilarTracks() {
   }
 }
 
-async function runOpenAiTest() {
-  isTestingOpenAi.value = true
-  openAiTestError.value = ""
-
-  try {
-    openAiTest.value = await testOpenAiStructuredOutput()
-  } catch (error) {
-    openAiTest.value = null
-    openAiTestError.value =
-      error instanceof Error ? error.message : "Could not run OpenAI structured output test."
-  } finally {
-    isTestingOpenAi.value = false
-  }
-}
 
 function formatDuration(seconds: number) {
   const minutes = Math.floor(seconds / 60)
@@ -480,9 +461,9 @@ function formatDuration(seconds: number) {
         <div>
           <div class="mb-2 flex items-center gap-2 text-sm font-medium text-muted-foreground">
             <Music2 class="h-4 w-4 text-primary" aria-hidden="true" />
-            Hackatune tracks
+            Hackatune Cyanite Challange
           </div>
-          <h1 class="text-3xl font-semibold tracking-normal text-foreground">Track browser</h1>
+          <h1 class="text-3xl font-semibold tracking-normal text-foreground">Track Browser</h1>
         </div>
         <div class="flex flex-wrap gap-2">
           <Badge variant="secondary" class="w-fit">
@@ -605,7 +586,7 @@ function formatDuration(seconds: number) {
               <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div class="min-w-0">
                   <CardDescription>Recommendation seeds</CardDescription>
-                  <CardTitle class="mt-2 break-words">Similar tracks</CardTitle>
+                  <CardTitle class="mt-2 break-words">Similar Tracks</CardTitle>
                 </div>
                 <Button
                   type="button"
@@ -739,9 +720,19 @@ function formatDuration(seconds: number) {
                     :key="item.track.id"
                     role="button"
                     tabindex="0"
-                    class="flex cursor-pointer items-start gap-3 p-3 transition-colors hover:bg-accent hover:text-accent-foreground"
+                    class="flex cursor-pointer items-start gap-3 p-3 transition-all duration-200 hover:bg-accent hover:text-accent-foreground"
                     :class="selectedModelOutputTarget?.id === item.track.id ? 'bg-accent text-accent-foreground' : ''"
-                    :style="trackColorMap[item.track.id] ? { borderLeft: `4px solid ${trackColorMap[item.track.id]}` } : {}"
+                    :style="{
+                      borderLeft: trackColorMap[item.track.id] ? `4px solid ${trackColorMap[item.track.id]}` : undefined,
+                      ...(hoveredTrackId === item.track.id ? {
+                        position: 'relative',
+                        zIndex: '10',
+                        transform: 'translateY(-2px)',
+                        boxShadow: `0 8px 24px ${trackColorMap[item.track.id] ?? '#94a3b8'}55, 0 2px 8px rgba(0,0,0,0.10), inset 0 1px 0 rgba(255,255,255,0.55)`,
+                      } : {}),
+                    }"
+                    @mouseenter="hoveredTrackId = item.track.id"
+                    @mouseleave="hoveredTrackId = null"
                     @click="selectSimilarTrack(item)"
                     @keydown.enter="selectSimilarTrack(item)"
                   >
@@ -790,7 +781,9 @@ function formatDuration(seconds: number) {
                 :seed-cyanite-ids="selectedSeedTracks.map(t => t.cyanite_id)"
                 :similar-items="similarTracks.map(item => ({ id: item.track.id, title: getSimilarTrackTitle(item) }))"
                 class="border-t pt-5"
+                :hovered-id="hoveredTrackId"
                 @color-map="handleColorMap"
+                @hover-change="(id) => { hoveredTrackId = id }"
               />
 
               <section class="space-y-3 border-t pt-5">
@@ -847,66 +840,6 @@ function formatDuration(seconds: number) {
                 </div>
               </section>
 
-              <section class="space-y-3 border-t pt-5">
-                <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div class="min-w-0">
-                    <h2 class="text-sm font-semibold">OpenAI Structured Output</h2>
-                    <p class="mt-1 text-sm text-muted-foreground">
-                      Server-side API key test
-                    </p>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    class="w-fit gap-2"
-                    :disabled="isTestingOpenAi"
-                    @click="runOpenAiTest"
-                  >
-                    <Loader2
-                      v-if="isTestingOpenAi"
-                      class="h-4 w-4 animate-spin"
-                      aria-hidden="true"
-                    />
-                    <Braces v-else class="h-4 w-4" aria-hidden="true" />
-                    {{ isTestingOpenAi ? "Testing" : "Test OpenAI" }}
-                  </Button>
-                </div>
-
-                <div
-                  v-if="openAiTestError"
-                  class="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
-                >
-                  <AlertCircle class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-                  <span>{{ openAiTestError }}</span>
-                </div>
-
-                <div v-if="openAiTest" class="rounded-md border p-3">
-                  <div class="flex items-start justify-between gap-3">
-                    <div class="min-w-0">
-                      <div class="text-sm font-medium">{{ openAiTest.result.message }}</div>
-                      <div class="mt-1 truncate font-mono text-xs text-muted-foreground">
-                        {{ openAiTest.model }}
-                      </div>
-                    </div>
-                    <Badge variant="outline" class="shrink-0">
-                      {{ openAiTest.result.status }}
-                    </Badge>
-                  </div>
-
-                  <ul
-                    v-if="openAiTest.result.next_steps.length"
-                    class="mt-3 space-y-1 text-sm text-muted-foreground"
-                  >
-                    <li
-                      v-for="step in openAiTest.result.next_steps"
-                      :key="step"
-                      class="truncate"
-                    >
-                      {{ step }}
-                    </li>
-                  </ul>
-                </div>
-              </section>
 
               <section v-if="selectedTrack" class="border-t pt-5">
                 <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">

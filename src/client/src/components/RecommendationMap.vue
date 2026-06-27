@@ -16,10 +16,12 @@ interface OuterTrack extends TrackData {
 const props = defineProps<{
   seedCyaniteIds: string[]
   similarItems: SimilarItem[]
+  hoveredId?: string | null
 }>()
 
 const emit = defineEmits<{
   (e: "colorMap", map: Record<string, string>): void
+  (e: "hoverChange", id: string | null): void
 }>()
 
 const W = 900
@@ -33,7 +35,8 @@ const centerTrack = ref<TrackData | null>(null)
 const outerTracks = ref<OuterTrack[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
-const hovered = ref<string | null>(null)
+
+const hovered = computed(() => props.hoveredId ?? null)
 
 const diffLabels = computed(() =>
   centerTrack.value
@@ -158,14 +161,15 @@ watch([seedKey, similarKey], loadData, { immediate: true })
           :key="node.id"
           :cx="outerPos(i, outerTracks.length, CX, CY, RADIUS).x"
           :cy="outerPos(i, outerTracks.length, CX, CY, RADIUS).y"
-          :r="hovered === node.id ? DOT_R + 3 : DOT_R"
+          :r="hovered === node.id ? DOT_R + 8 : DOT_R"
           :fill="node.color"
-          fill-opacity="0.85"
+          :fill-opacity="hovered === node.id ? 1 : 0.85"
           stroke="white"
-          stroke-width="1.5"
+          :stroke-width="hovered === node.id ? 2.5 : 1.5"
+          :style="hovered === node.id ? { filter: `drop-shadow(0 4px 12px ${node.color}cc)` } : {}"
           class="cursor-pointer transition-all"
-          @mouseenter="hovered = node.id"
-          @mouseleave="hovered = null"
+          @mouseenter="emit('hoverChange', node.id)"
+          @mouseleave="emit('hoverChange', null)"
         />
 
         <!-- center dot (seed tracks) -->
@@ -177,8 +181,8 @@ watch([seedKey, similarKey], loadData, { immediate: true })
           stroke="white"
           stroke-width="2.5"
           class="cursor-pointer transition-all"
-          @mouseenter="hovered = 'seed'"
-          @mouseleave="hovered = null"
+          @mouseenter="emit('hoverChange', 'seed')"
+          @mouseleave="emit('hoverChange', null)"
         />
         <text
           :x="CX"
