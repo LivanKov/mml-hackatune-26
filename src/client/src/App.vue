@@ -167,6 +167,42 @@ function getSimilarTrackArtist(item: SimilarTrackItem) {
   return getSimilarTrackLocalMatch(item)?.artist_name ?? "Cyanite library track"
 }
 
+function summarizeModelOutputs(data: unknown): Record<string, unknown> {
+  const items: unknown[] = []
+
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    const obj = data as Record<string, unknown>
+    const found = ["items", "data", "models", "results"].find((key) => Array.isArray(obj[key]))
+    if (found) {
+      items.push(...(obj[found] as unknown[]))
+    } else {
+      for (const v of Object.values(obj)) {
+        if (v && typeof v === "object" && !Array.isArray(v) && "version" in v) {
+          items.push(v)
+        }
+      }
+    }
+  } else if (Array.isArray(data)) {
+    items.push(...data)
+  }
+
+  const summary: Record<string, unknown> = {}
+  for (const mo of items) {
+    if (!mo || typeof mo !== "object" || Array.isArray(mo)) continue
+    const item = mo as Record<string, unknown>
+    const version = typeof item.version === "string" ? item.version : "?"
+    if (item.tags !== undefined) {
+      summary[version] = item.tags
+    } else if ("tag" in item) {
+      summary[version] = item.tag
+    } else if ("description" in item) {
+      summary[version] = item.description
+    }
+  }
+
+  return summary
+}
+
 function clearModelOutput() {
   modelOutputRequestId += 1
   selectedModelOutputTarget.value = null
@@ -190,7 +226,7 @@ async function fetchModelOutput(target: ModelOutputTarget) {
       return
     }
 
-    modelOutputJson.value = JSON.stringify(data, null, 2)
+    modelOutputJson.value = JSON.stringify(summarizeModelOutputs(data), null, 2)
   } catch (error) {
     if (requestId !== modelOutputRequestId) {
       return
