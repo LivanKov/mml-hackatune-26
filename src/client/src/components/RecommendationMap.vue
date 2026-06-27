@@ -122,7 +122,7 @@ watch([seedKey, similarKey], loadData, { immediate: true })
 
 <template>
   <section>
-    <h2 class="mb-3 text-sm font-semibold">Recommendation Map</h2>
+    <h2 class="mb-3 text-2xl font-semibold leading-none tracking-normal" style="padding-bottom: 50px; padding-top: 30px;">Recommendation Map</h2>
 
     <div v-if="loading" class="flex h-48 items-center justify-center text-sm text-muted-foreground">
       Loading map…

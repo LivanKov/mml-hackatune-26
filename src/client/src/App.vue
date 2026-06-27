@@ -33,7 +33,6 @@ import {
 import { fetchJamendoTracks, type JamendoTrack } from "@/lib/jamendo"
 import {
   generateSimilarTrackSummary,
-  type TrackExplanation,
 } from "@/lib/openai"
 import { tracks, type Track } from "@/lib/tracks"
 import { users, type User } from "@/lib/users"
@@ -62,19 +61,13 @@ const modelOutputJson = ref("")
 const modelOutputError = ref("")
 const isFetchingModelOutput = ref(false)
 let modelOutputRequestId = 0
-interface ChatMessage {
-  role: "assistant" | "user"
-  text: string
-  filter?: Record<string, unknown>
-}
-
-const chatMessages = ref<ChatMessage[]>([])
 const chatInput = ref("")
 const isChatLoading = ref(false)
 const chatError = ref("")
 const currentFilter = ref<Record<string, unknown> | null>(null)
 let currentSeedSummaries: Record<string, unknown>[] = []
 const promptHistory = ref<string[]>([])
+const trackExplanations = ref<Record<string, string>>({})
 
 const trackColorMap = ref<Record<string, string>>({})
 const hoveredTrackId = ref<string | null>(null)
@@ -186,11 +179,11 @@ function selectUser(user: User) {
   selectedSeedTrackIds.value = []
   similarTracks.value = []
   similarError.value = ""
-  chatMessages.value = []
   chatError.value = ""
   currentFilter.value = null
   currentSeedSummaries = []
   promptHistory.value = []
+  trackExplanations.value = {}
   if (audioEl) { audioEl.pause(); audioEl = null }
   playingJamendoId.value = null
   clearModelOutput()
@@ -220,25 +213,31 @@ function toggleSeedTrack(trackId: string) {
   similarError.value = ""
 }
 
-function getSimilarTrackJamendoId(item: SimilarTrackItem): string | null {
-  const match = item.track.title?.match(/^(\d+)\.mp3$/i)
+function extractJamendoIdFromTitle(title: string | undefined | null): string | null {
+  const match = title?.match(/^(\d+)\.mp3$/i)
   return match ? match[1] : null
 }
 
 function getSimilarTrackLocalMatch(item: SimilarTrackItem) {
   const byCyanite = tracksByCyaniteId.get(item.track.id)
   if (byCyanite) return byCyanite
-  const jamendoId = getSimilarTrackJamendoId(item)
+  const jamendoId = extractJamendoIdFromTitle(item.track.title)
   if (jamendoId) return tracksById.get(jamendoId)
   return undefined
+}
+
+function getSimilarTrackJamendoId(item: SimilarTrackItem): string | null {
+  const local = getSimilarTrackLocalMatch(item)
+  if (local) return local.track_id
+  return extractJamendoIdFromTitle(item.track.title)
 }
 
 function getSimilarTrackTitle(item: SimilarTrackItem) {
   const local = getSimilarTrackLocalMatch(item)
   if (local) return local.name
   const jamendoId = getSimilarTrackJamendoId(item)
-  if (jamendoId) return jamendoNames.value.get(jamendoId)?.name ?? jamendoId
-  return item.track.id
+  if (jamendoId) return jamendoNames.value.get(jamendoId)?.name ?? `Song ${jamendoId}`
+  return `Song ${item.track.id}`
 }
 
 function getSimilarTrackArtist(item: SimilarTrackItem) {
@@ -346,20 +345,6 @@ function selectSimilarTrack(item: SimilarTrackItem) {
   })
 }
 
-function formatExplanations(explanations: TrackExplanation[], similar: typeof similarTracks.value): string {
-  return explanations.map((exp, i) => {
-    const track = similar[i]
-    const title = track ? getSimilarTrackTitle(track) : exp.id
-    return `**${i + 1}. ${title}**\n${exp.explanation}`
-  }).join("\n\n")
-}
-
-function renderMarkdown(text: string): string {
-  return text
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-    .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
-    .replace(/\n/g, "<br>")
-}
 
 async function generateSummary() {
   const seeds = selectedSeedTracks.value
@@ -385,10 +370,12 @@ async function generateSummary() {
     }))
 
     const result = await generateSimilarTrackSummary(currentSeedSummaries, tracks)
-    chatMessages.value.push({
-      role: "assistant",
-      text: formatExplanations(result.explanations, similar),
+    const explanations: Record<string, string> = {}
+    result.explanations.forEach((exp, i) => {
+      const track = similar[i]
+      if (track) explanations[track.track.id] = exp.explanation
     })
+    trackExplanations.value = explanations
   } catch (error) {
     chatError.value = error instanceof Error ? error.message : "Could not generate summary."
   } finally {
@@ -401,9 +388,9 @@ async function sendChatMessage() {
   if (!message || isChatLoading.value) return
 
   chatInput.value = ""
-  chatMessages.value.push({ role: "user", text: message })
   isChatLoading.value = true
   chatError.value = ""
+  trackExplanations.value = {}
 
   try {
     promptHistory.value.push(message)
@@ -425,10 +412,10 @@ async function fetchSimilarTracks() {
 
   isFindingSimilar.value = true
   similarError.value = ""
-  chatMessages.value = []
   chatError.value = ""
   currentFilter.value = null
   promptHistory.value = []
+  trackExplanations.value = {}
 
   try {
     const result = await findSimilarLibraryTracks(
@@ -456,7 +443,7 @@ function formatDuration(seconds: number) {
 
 <template>
   <main class="min-h-screen bg-background">
-    <div class="mx-auto flex w-full max-w-7xl flex-col px-4 py-6 sm:px-6 lg:px-8">
+    <div class="mx-auto flex w-full max-w-full flex-col px-10 py-10 sm:px- lg:px-10">
       <header class="mb-6 flex flex-col gap-3 border-b pb-5 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <div class="mb-2 flex items-center gap-2 text-sm font-medium text-muted-foreground">
@@ -580,8 +567,8 @@ function formatDuration(seconds: number) {
           </div>
         </section>
 
-        <section class="min-h-[420px]">
-          <Card class="h-full">
+        <section class="flex min-h-[420px] items-start gap-4">
+          <Card class="min-w-0 flex-1">
             <CardHeader>
               <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div class="min-w-0">
@@ -639,12 +626,7 @@ function formatDuration(seconds: number) {
                 <span>{{ similarError }}</span>
               </div>
 
-              <section
-                v-if="chatMessages.length || isChatLoading || chatError"
-                class="space-y-3"
-              >
-                <h2 class="text-sm font-semibold">Chat</h2>
-
+              <div v-if="similarTracks.length" class="space-y-2">
                 <div
                   v-if="chatError"
                   class="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
@@ -652,31 +634,6 @@ function formatDuration(seconds: number) {
                   <AlertCircle class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                   <span>{{ chatError }}</span>
                 </div>
-
-                <div class="flex max-h-96 flex-col gap-2 overflow-y-auto rounded-md border p-3">
-                  <div
-                    v-for="(msg, i) in chatMessages"
-                    :key="i"
-                    class="flex gap-2"
-                    :class="msg.role === 'user' ? 'justify-end' : 'justify-start'"
-                  >
-                    <div
-                      class="max-w-[85%] space-y-1 rounded-lg px-3 py-2 text-sm"
-                      :class="msg.role === 'user'
-                        ? 'bg-primary text-primary-foreground'
-                        : 'bg-muted text-foreground'"
-                      v-html="renderMarkdown(msg.text)"
-                    />
-                  </div>
-
-                  <div v-if="isChatLoading" class="flex justify-start">
-                    <div class="flex items-center gap-2 rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
-                      <Loader2 class="h-3 w-3 animate-spin" aria-hidden="true" />
-                      Thinking
-                    </div>
-                  </div>
-                </div>
-
                 <div class="flex gap-2">
                   <input
                     v-model="chatInput"
@@ -689,14 +646,15 @@ function formatDuration(seconds: number) {
                   <Button
                     type="button"
                     variant="outline"
-                    class="shrink-0"
+                    class="shrink-0 gap-2"
                     :disabled="!chatInput.trim() || isChatLoading"
                     @click="sendChatMessage"
                   >
-                    Send
+                    <Loader2 v-if="isChatLoading" class="h-4 w-4 animate-spin" aria-hidden="true" />
+                    {{ isChatLoading ? "Searching…" : "Refine" }}
                   </Button>
                 </div>
-              </section>
+              </div>
 
               <section class="space-y-3">
                 <div class="flex items-center justify-between gap-3">
@@ -755,6 +713,9 @@ function formatDuration(seconds: number) {
                           <div v-if="getSimilarTrackArtist(item)" class="mt-1 truncate text-xs text-muted-foreground">
                             {{ getSimilarTrackArtist(item) }}
                           </div>
+                          <div v-if="trackExplanations[item.track.id]" class="mt-1.5 text-xs text-muted-foreground leading-relaxed line-clamp-3">
+                            {{ trackExplanations[item.track.id] }}
+                          </div>
                         </div>
                         <Badge
                           v-if="typeof item.score === 'number'"
@@ -776,15 +737,6 @@ function formatDuration(seconds: number) {
                 </div>
               </section>
 
-              <RecommendationMap
-                v-if="similarTracks.length"
-                :seed-cyanite-ids="selectedSeedTracks.map(t => t.cyanite_id)"
-                :similar-items="similarTracks.map(item => ({ id: item.track.id, title: getSimilarTrackTitle(item) }))"
-                class="border-t pt-5"
-                :hovered-id="hoveredTrackId"
-                @color-map="handleColorMap"
-                @hover-change="(id) => { hoveredTrackId = id }"
-              />
 
               <section class="space-y-3 border-t pt-5">
                 <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -891,6 +843,16 @@ function formatDuration(seconds: number) {
               </section>
             </CardContent>
           </Card>
+
+          <div v-if="similarTracks.length" class="w-[45%] shrink-0 rounded-lg border bg-card p-4">
+            <RecommendationMap
+              :seed-cyanite-ids="selectedSeedTracks.map(t => t.cyanite_id)"
+              :similar-items="similarTracks.map(item => ({ id: item.track.id, title: getSimilarTrackTitle(item) }))"
+              :hovered-id="hoveredTrackId"
+              @color-map="handleColorMap"
+              @hover-change="(id) => { hoveredTrackId = id }"
+            />
+          </div>
         </section>
       </div>
 
