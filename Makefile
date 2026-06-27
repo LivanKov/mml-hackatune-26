@@ -27,4 +27,17 @@ run: api-deps client-deps
 	(cd $(CLIENT_DIR) && npm run dev) & client_pid=$$!; \
 	wait $$api_pid $$client_pid
 
-.PHONY: api-deps client-deps run
+debug: api-deps client-deps
+	@set -e; \
+	api_pid=""; \
+	client_pid=""; \
+	cleanup() { \
+		if [ -n "$$api_pid" ]; then kill "$$api_pid" 2>/dev/null || true; fi; \
+		if [ -n "$$client_pid" ]; then kill "$$client_pid" 2>/dev/null || true; fi; \
+	}; \
+	trap cleanup INT TERM EXIT; \
+	BOTTLE_DEBUG=1 BOTTLE_RELOADER=1 $(API_PYTHON) $(API_DIR)/app.py & api_pid=$$!; \
+	(cd $(CLIENT_DIR) && npm run dev) & client_pid=$$!; \
+	wait $$api_pid $$client_pid
+
+.PHONY: api-deps client-deps run debug

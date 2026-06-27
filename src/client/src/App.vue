@@ -30,8 +30,10 @@ import {
   type SimilarTrackItem,
 } from "@/lib/cyanite"
 import {
+  generateSimilarTrackSummary,
   testOpenAiStructuredOutput,
   type OpenAiStructuredTestResponse,
+  type TrackExplanation,
 } from "@/lib/openai"
 import { tracks, type Track } from "@/lib/tracks"
 import { users, type User } from "@/lib/users"
@@ -62,6 +64,9 @@ const modelOutputJson = ref("")
 const modelOutputError = ref("")
 const isFetchingModelOutput = ref(false)
 let modelOutputRequestId = 0
+const trackExplanations = ref<TrackExplanation[]>([])
+const summaryError = ref("")
+const isGeneratingSummary = ref(false)
 
 const trackRowHeight = 60
 const overscanRows = 6
@@ -128,6 +133,8 @@ function selectUser(user: User) {
   selectedSeedTrackIds.value = []
   similarTracks.value = []
   similarError.value = ""
+  trackExplanations.value = []
+  summaryError.value = ""
   clearModelOutput()
 }
 
@@ -264,6 +271,40 @@ function selectSimilarTrack(item: SimilarTrackItem) {
   })
 }
 
+async function generateSummary() {
+  const seeds = selectedSeedTracks.value
+  const similar = similarTracks.value
+  if (!seeds.length || !similar.length) return
+
+  isGeneratingSummary.value = true
+  summaryError.value = ""
+
+  try {
+    const [seedOutputs, similarOutputs] = await Promise.all([
+      Promise.all(seeds.map((t) => getLibraryTrackModels(t.cyanite_id).catch(() => null))),
+      Promise.all(similar.map((item) => getLibraryTrackModels(item.track.id).catch(() => null))),
+    ])
+
+    const seedSummaries = seedOutputs
+      .filter(Boolean)
+      .map((data) => summarizeModelOutputs(data))
+
+    const tracks = similar.map((item, i) => ({
+      id: item.track.id,
+      title: getSimilarTrackTitle(item),
+      artist: getSimilarTrackArtist(item),
+      summary: similarOutputs[i] ? summarizeModelOutputs(similarOutputs[i]) : {},
+    }))
+
+    const result = await generateSimilarTrackSummary(seedSummaries, tracks)
+    trackExplanations.value = result.explanations
+  } catch (error) {
+    summaryError.value = error instanceof Error ? error.message : "Could not generate summary."
+  } finally {
+    isGeneratingSummary.value = false
+  }
+}
+
 async function fetchSimilarTracks() {
   if (!canFindSimilarTracks.value) {
     return
@@ -271,13 +312,16 @@ async function fetchSimilarTracks() {
 
   isFindingSimilar.value = true
   similarError.value = ""
+  trackExplanations.value = []
+  summaryError.value = ""
 
   try {
     const result = await findSimilarLibraryTracks(
       selectedSeedTracks.value.map((track) => track.cyanite_id),
-      20,
+      10,
     )
     similarTracks.value = result.items ?? []
+    void generateSummary()
   } catch (error) {
     similarError.value = error instanceof Error ? error.message : "Could not fetch similar tracks."
   } finally {
@@ -484,6 +528,40 @@ function formatDuration(seconds: number) {
                 <AlertCircle class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                 <span>{{ similarError }}</span>
               </div>
+
+              <section
+                v-if="trackExplanations.length || isGeneratingSummary || summaryError"
+                class="space-y-3"
+              >
+                <h2 class="text-sm font-semibold">Why these tracks match</h2>
+
+                <div
+                  v-if="summaryError"
+                  class="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+                >
+                  <AlertCircle class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span>{{ summaryError }}</span>
+                </div>
+
+                <div
+                  v-if="isGeneratingSummary"
+                  class="flex min-h-20 items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground"
+                >
+                  <Loader2 class="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
+                  Generating summary
+                </div>
+
+                <ul v-else-if="trackExplanations.length" class="space-y-2">
+                  <li
+                    v-for="exp in trackExplanations"
+                    :key="exp.id"
+                    class="rounded-md border p-3"
+                  >
+                    <div class="truncate font-mono text-xs text-muted-foreground">{{ exp.id }}</div>
+                    <p class="mt-1 text-sm">{{ exp.explanation }}</p>
+                  </li>
+                </ul>
+              </section>
 
               <section class="space-y-3">
                 <div class="flex items-center justify-between gap-3">

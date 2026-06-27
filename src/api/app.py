@@ -218,6 +218,52 @@ def build_openai_structured_test_payload() -> dict[str, Any]:
     }
 
 
+def build_track_summary_payload(seed_summaries: list[dict[str, Any]], tracks: list[dict[str, Any]]) -> dict[str, Any]:
+    seed_part = json.dumps(seed_summaries, indent=2)
+    tracks_part = "\n".join(
+        f'{i + 1}. "{t.get("title", t["id"])}" by {t.get("artist", "Unknown")}\n   Audio profile: {json.dumps(t.get("summary", {}))}'
+        for i, t in enumerate(tracks)
+    )
+    return {
+        "model": MODEL,
+        "reasoning": {"effort": REASONING_EFFORT},
+        "instructions": "You are a music recommendation assistant. Be concise and specific about musical qualities.",
+        "input": (
+            f"A user liked tracks with these audio profiles:\n{seed_part}\n\n"
+            f"Here are recommended tracks:\n{tracks_part}\n\n"
+            "For each recommended track, write exactly one sentence explaining why it matches "
+            "the liked tracks based on mood, genre, energy, or style."
+        ),
+        "text": {
+            "verbosity": TEXT_VERBOSITY,
+            "format": {
+                "type": "json_schema",
+                "name": "track_summary",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "explanations": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "id": {"type": "string"},
+                                    "explanation": {"type": "string"},
+                                },
+                                "required": ["id", "explanation"],
+                            },
+                        },
+                    },
+                    "required": ["explanations"],
+                },
+            },
+        },
+    }
+
+
 def normalize_similar_tracks_response(
     data: Any,
     seed_track_ids: list[str],
@@ -336,11 +382,42 @@ def openai_test() -> HTTPResponse:
         return json_response({"error": error.message}, error.status_code)
 
 
+@app.post("/api/track-summary")
+def track_summary() -> HTTPResponse:
+    try:
+        payload = get_json_body()
+        seed_summaries = payload.get("seedSummaries", [])
+        tracks = payload.get("tracks", [])
+
+        if not isinstance(tracks, list) or not tracks:
+            raise ApiError(400, "tracks must be a non-empty list.")
+
+        openai_payload = build_track_summary_payload(seed_summaries, tracks)
+        status_code, openai_data = post_openai_json("/responses", openai_payload)
+
+        if status_code < 200 or status_code >= 300:
+            return json_response({"error": "OpenAI API request failed.", "details": openai_data}, status_code)
+
+        output_text = extract_openai_output_text(openai_data)
+        if not output_text:
+            raise ApiError(502, "OpenAI response did not include output text.")
+
+        try:
+            result = json.loads(output_text)
+        except json.JSONDecodeError as error:
+            raise ApiError(502, "OpenAI response was not valid JSON.") from error
+
+        return json_response(result)
+    except ApiError as error:
+        return json_response({"error": error.message}, error.status_code)
+
+
 def main() -> None:
     host = os.environ.get("API_HOST", os.environ.get("BACKEND_HOST", "localhost"))
     port = int(os.environ.get("API_PORT", os.environ.get("BACKEND_PORT", "8001")))
     debug = os.environ.get("BOTTLE_DEBUG") == "1"
-    run(app=app, host=host, port=port, debug=debug, reloader=False)
+    reloader = os.environ.get("BOTTLE_RELOADER") == "1"
+    run(app=app, host=host, port=port, debug=debug, reloader=reloader)
 
 
 if __name__ == "__main__":
