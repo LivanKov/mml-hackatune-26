@@ -67,6 +67,7 @@ let modelOutputRequestId = 0
 const trackExplanations = ref<TrackExplanation[]>([])
 const summaryError = ref("")
 const isGeneratingSummary = ref(false)
+const recommendationAnalysisTab = ref<"matches" | "summary">("matches")
 
 const trackRowHeight = 60
 const overscanRows = 6
@@ -533,34 +534,82 @@ function formatDuration(seconds: number) {
                 v-if="trackExplanations.length || isGeneratingSummary || summaryError"
                 class="space-y-3"
               >
-                <h2 class="text-sm font-semibold">Why these tracks match</h2>
-
                 <div
-                  v-if="summaryError"
-                  class="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+                  class="flex rounded-md border bg-muted/30 p-1"
+                  role="tablist"
+                  aria-label="Recommendation analysis"
                 >
-                  <AlertCircle class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-                  <span>{{ summaryError }}</span>
-                </div>
-
-                <div
-                  v-if="isGeneratingSummary"
-                  class="flex min-h-20 items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground"
-                >
-                  <Loader2 class="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
-                  Generating summary
-                </div>
-
-                <ul v-else-if="trackExplanations.length" class="space-y-2">
-                  <li
-                    v-for="exp in trackExplanations"
-                    :key="exp.id"
-                    class="rounded-md border p-3"
+                  <button
+                    id="recommendation-tab-matches"
+                    type="button"
+                    role="tab"
+                    class="flex-1 rounded-sm px-3 py-2 text-sm font-medium transition-colors"
+                    :class="recommendationAnalysisTab === 'matches'
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'"
+                    :aria-selected="recommendationAnalysisTab === 'matches'"
+                    aria-controls="recommendation-panel-matches"
+                    @click="recommendationAnalysisTab = 'matches'"
                   >
-                    <div class="truncate font-mono text-xs text-muted-foreground">{{ exp.id }}</div>
-                    <p class="mt-1 text-sm">{{ exp.explanation }}</p>
-                  </li>
-                </ul>
+                    Why these tracks match
+                  </button>
+                  <button
+                    id="recommendation-tab-summary"
+                    type="button"
+                    role="tab"
+                    class="flex-1 rounded-sm px-3 py-2 text-sm font-medium transition-colors"
+                    :class="recommendationAnalysisTab === 'summary'
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'"
+                    :aria-selected="recommendationAnalysisTab === 'summary'"
+                    aria-controls="recommendation-panel-summary"
+                    @click="recommendationAnalysisTab = 'summary'"
+                  >
+                    Recommendation summary
+                  </button>
+                </div>
+
+                <div
+                  v-show="recommendationAnalysisTab === 'matches'"
+                  id="recommendation-panel-matches"
+                  class="space-y-3"
+                  role="tabpanel"
+                  aria-labelledby="recommendation-tab-matches"
+                >
+                  <div
+                    v-if="summaryError"
+                    class="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+                  >
+                    <AlertCircle class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                    <span>{{ summaryError }}</span>
+                  </div>
+
+                  <div
+                    v-if="isGeneratingSummary"
+                    class="flex min-h-20 items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground"
+                  >
+                    <Loader2 class="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
+                    Generating summary
+                  </div>
+
+                  <ul v-else-if="trackExplanations.length" class="space-y-2">
+                    <li
+                      v-for="exp in trackExplanations"
+                      :key="exp.id"
+                      class="rounded-md border p-3"
+                    >
+                      <div class="truncate font-mono text-xs text-muted-foreground">{{ exp.id }}</div>
+                      <p class="mt-1 text-sm">{{ exp.explanation }}</p>
+                    </li>
+                  </ul>
+                </div>
+
+                <div
+                  v-show="recommendationAnalysisTab === 'summary'"
+                  id="recommendation-panel-summary"
+                  role="tabpanel"
+                  aria-labelledby="recommendation-tab-summary"
+                />
               </section>
 
               <section class="space-y-3">
