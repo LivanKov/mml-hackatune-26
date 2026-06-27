@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue"
-import { Clock, Disc3, ExternalLink, Hash, Music2 } from "lucide-vue-next"
+import { Clock, Disc3, ExternalLink, Hash, Music2, UserRound } from "lucide-vue-next"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -12,6 +12,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { tracks } from "@/lib/tracks"
+import { users } from "@/lib/users"
 
 const selectedTrackId = ref(tracks[0]?.track_id ?? "")
 const listScrollTop = ref(0)
@@ -63,12 +64,34 @@ function formatDuration(seconds: number) {
           </div>
           <h1 class="text-3xl font-semibold tracking-normal text-foreground">Track browser</h1>
         </div>
-        <Badge variant="secondary" class="w-fit">
-          {{ tracks.length.toLocaleString() }} tracks
-        </Badge>
+        <div class="flex flex-wrap gap-2">
+          <Badge variant="secondary" class="w-fit">
+            {{ users.length.toLocaleString() }} users
+          </Badge>
+          <Badge variant="secondary" class="w-fit">
+            {{ tracks.length.toLocaleString() }} tracks
+          </Badge>
+        </div>
       </header>
 
-      <div class="grid min-h-0 flex-1 gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+      <div class="grid min-h-0 flex-1 gap-4 lg:grid-cols-[220px_320px_minmax(0,1fr)]">
+        <section class="flex h-[360px] min-h-0 flex-col rounded-lg border bg-card lg:h-full">
+          <div class="border-b p-4">
+            <h2 class="text-sm font-semibold">User IDs</h2>
+          </div>
+
+          <div class="min-h-0 flex-1 overflow-y-auto p-2">
+            <div
+              v-for="user in users"
+              :key="user.user_id"
+              class="flex h-11 items-center gap-3 rounded-md px-3 py-2"
+            >
+              <UserRound class="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <span class="min-w-0 truncate font-mono text-sm">{{ user.user_id }}</span>
+            </div>
+          </div>
+        </section>
+
         <section class="flex h-[520px] min-h-0 flex-col rounded-lg border bg-card lg:h-full">
           <div class="border-b p-4">
             <h2 class="text-sm font-semibold">Track IDs</h2>
