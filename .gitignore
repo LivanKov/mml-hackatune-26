@@ -11,7 +11,11 @@ __pycache__/
 
 # python venv
 .venv/
+<<<<<<< HEAD
 
 /notebooks/cyanite_model_outputs.ipynb
 
 .vscode/
+=======
+/notebooks/*
+>>>>>>> recommendation_map

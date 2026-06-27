@@ -40,6 +40,7 @@ import {
 } from "@/lib/openai"
 import { tracks, type Track } from "@/lib/tracks"
 import { users, type User } from "@/lib/users"
+import RecommendationMap from "@/components/RecommendationMap.vue"
 
 interface ModelOutputTarget {
   id: string
@@ -81,6 +82,7 @@ const currentFilter = ref<Record<string, unknown> | null>(null)
 let currentSeedSummaries: Record<string, unknown>[] = []
 const promptHistory = ref<string[]>([])
 
+const trackColorMap = ref<Record<string, string>>({})
 const playingJamendoId = ref<string | null>(null)
 let audioEl: HTMLAudioElement | null = null
 const jamendoNames = ref<Map<string, JamendoTrack>>(new Map())
@@ -106,6 +108,10 @@ function handleSimilarPlayClick(item: SimilarTrackItem, event: MouseEvent) {
   event.stopPropagation()
   const jamendoId = getSimilarTrackJamendoId(item)
   if (jamendoId) toggleAudio(jamendoId, event)
+}
+
+function handleColorMap(map: Record<string, string>) {
+  trackColorMap.value = map
 }
 
 async function enrichSimilarTrackNames(items: SimilarTrackItem[]) {
@@ -347,7 +353,7 @@ function selectSimilarTrack(item: SimilarTrackItem) {
 
 function formatExplanations(explanations: TrackExplanation[], similar: typeof similarTracks.value): string {
   return explanations.map((exp, i) => {
-    const track = similar.find((t) => t.track.id === exp.id)
+    const track = similar[i]
     const title = track ? getSimilarTrackTitle(track) : exp.id
     return `**${i + 1}. ${title}**\n${exp.explanation}`
   }).join("\n\n")
@@ -469,7 +475,7 @@ function formatDuration(seconds: number) {
 
 <template>
   <main class="min-h-screen bg-background">
-    <div class="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-4 py-6 sm:px-6 lg:px-8">
+    <div class="mx-auto flex w-full max-w-7xl flex-col px-4 py-6 sm:px-6 lg:px-8">
       <header class="mb-6 flex flex-col gap-3 border-b pb-5 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <div class="mb-2 flex items-center gap-2 text-sm font-medium text-muted-foreground">
@@ -694,7 +700,7 @@ function formatDuration(seconds: number) {
                   <input
                     v-model="chatInput"
                     type="text"
-                    placeholder="e.g. but I want more energetic songs…"
+                    placeholder="but I want something more up-beat..."
                     class="flex-1 rounded-md border bg-background px-3 py-2 text-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring"
                     :disabled="isChatLoading"
                     @keydown.enter="sendChatMessage"
@@ -735,6 +741,7 @@ function formatDuration(seconds: number) {
                     tabindex="0"
                     class="flex cursor-pointer items-start gap-3 p-3 transition-colors hover:bg-accent hover:text-accent-foreground"
                     :class="selectedModelOutputTarget?.id === item.track.id ? 'bg-accent text-accent-foreground' : ''"
+                    :style="trackColorMap[item.track.id] ? { borderLeft: `4px solid ${trackColorMap[item.track.id]}` } : {}"
                     @click="selectSimilarTrack(item)"
                     @keydown.enter="selectSimilarTrack(item)"
                   >
@@ -777,6 +784,14 @@ function formatDuration(seconds: number) {
                   No similar tracks yet
                 </div>
               </section>
+
+              <RecommendationMap
+                v-if="similarTracks.length"
+                :seed-cyanite-ids="selectedSeedTracks.map(t => t.cyanite_id)"
+                :similar-items="similarTracks.map(item => ({ id: item.track.id, title: getSimilarTrackTitle(item) }))"
+                class="border-t pt-5"
+                @color-map="handleColorMap"
+              />
 
               <section class="space-y-3 border-t pt-5">
                 <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -945,6 +960,7 @@ function formatDuration(seconds: number) {
           </Card>
         </section>
       </div>
+
     </div>
   </main>
 </template>
