@@ -10,10 +10,14 @@ from urllib.request import Request, urlopen
 
 from bottle import Bottle, HTTPResponse, request, response, run
 
+MODEL = "gpt-5.5"
+REASONING_EFFORT = "none"
+TEXT_VERBOSITY="low"
 
 APP_DIR = Path(__file__).resolve().parent
 REPO_ROOT = APP_DIR.parents[1]
 CYANITE_BASE_URL = "https://rest-api.cyanite.ai/v1"
+OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 50
 MAX_SEED_TRACKS = 10
@@ -127,6 +131,93 @@ def post_cyanite_json(path: str, query: dict[str, Any], payload: dict[str, Any])
         raise ApiError(502, f"Could not reach Cyanite API: {reason}") from error
 
 
+def post_openai_json(path: str, payload: dict[str, Any]) -> tuple[int, Any]:
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        raise ApiError(500, "OPENAI_API_KEY is not configured.")
+
+    base_url = OPENAI_BASE_URL.rstrip("/")
+    body = json.dumps(payload).encode("utf-8")
+    req = Request(
+        f"{base_url}{path}",
+        data=body,
+        method="POST",
+        headers={
+            "authorization": f"Bearer {api_key}",
+            "content-type": "application/json",
+        },
+    )
+
+    try:
+        with urlopen(req, timeout=60) as res:
+            return res.status, parse_json_text(res.read().decode("utf-8"))
+    except HTTPError as error:
+        return error.code, parse_json_text(error.read().decode("utf-8"))
+    except URLError as error:
+        reason = getattr(error, "reason", error)
+        raise ApiError(502, f"Could not reach OpenAI API: {reason}") from error
+
+
+def extract_openai_output_text(data: Any) -> str:
+    if not isinstance(data, dict):
+        return ""
+
+    output_text = data.get("output_text")
+    if isinstance(output_text, str):
+        return output_text
+
+    parts: list[str] = []
+    for output_item in data.get("output", []):
+        if not isinstance(output_item, dict):
+            continue
+        for content_item in output_item.get("content", []):
+            if not isinstance(content_item, dict):
+                continue
+            text = content_item.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+
+    return "".join(parts)
+
+
+def build_openai_structured_test_payload() -> dict[str, Any]:
+    return {
+        "model": MODEL,
+        "reasoning": {
+            "effort": REASONING_EFFORT,
+        },
+        "instructions": (
+            "Return a tiny service health check. Keep the message short and practical."
+        ),
+        "input": "Confirm that the OpenAI structured output test route is working.",
+        "text": {
+            "verbosity": TEXT_VERBOSITY,
+            "format": {
+                "type": "json_schema",
+                "name": "openai_structured_output_test",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "ok": {"type": "boolean"},
+                        "status": {
+                            "type": "string",
+                            "enum": ["pass", "warning", "fail"],
+                        },
+                        "message": {"type": "string"},
+                        "next_steps": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                    },
+                    "required": ["ok", "status", "message", "next_steps"],
+                },
+            },
+        },
+    }
+
+
 def normalize_similar_tracks_response(
     data: Any,
     seed_track_ids: list[str],
@@ -189,6 +280,7 @@ def health() -> HTTPResponse:
     return json_response({
         "ok": True,
         "cyaniteConfigured": bool(os.environ.get("CYANITE_API_KEY", "").strip()),
+        "openaiConfigured": bool(os.environ.get("OPENAI_API_KEY", "").strip()),
     })
 
 
@@ -208,6 +300,38 @@ def similar_tracks() -> HTTPResponse:
             return json_response(cyanite_data, status_code)
 
         return json_response(normalize_similar_tracks_response(cyanite_data, track_ids, limit))
+    except ApiError as error:
+        return json_response({"error": error.message}, error.status_code)
+
+
+@app.post("/api/openai-test")
+def openai_test() -> HTTPResponse:
+    try:
+        payload = build_openai_structured_test_payload()
+        status_code, openai_data = post_openai_json("/responses", payload)
+
+        if status_code < 200 or status_code >= 300:
+            return json_response({
+                "error": "OpenAI API request failed.",
+                "details": openai_data,
+            }, status_code)
+
+        output_text = extract_openai_output_text(openai_data)
+        if not output_text:
+            raise ApiError(502, "OpenAI response did not include output text.")
+
+        try:
+            result = json.loads(output_text)
+        except json.JSONDecodeError as error:
+            raise ApiError(502, "OpenAI response was not valid JSON.") from error
+
+        return json_response({
+            "model": openai_data.get("model", payload["model"])
+            if isinstance(openai_data, dict)
+            else payload["model"],
+            "result": result,
+            "usage": openai_data.get("usage") if isinstance(openai_data, dict) else None,
+        })
     except ApiError as error:
         return json_response({"error": error.message}, error.status_code)
 
