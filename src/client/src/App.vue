@@ -28,12 +28,12 @@ import {
   CYANITE_MODEL_OUTPUTS,
   findSimilarLibraryTracks,
   getLibraryTrackModels,
+  searchByPrompt,
   type SimilarTrackItem,
 } from "@/lib/cyanite"
 import { fetchJamendoTracks, type JamendoTrack } from "@/lib/jamendo"
 import {
   generateSimilarTrackSummary,
-  refineToFilter,
   testOpenAiStructuredOutput,
   type OpenAiStructuredTestResponse,
   type TrackExplanation,
@@ -79,6 +79,7 @@ const isChatLoading = ref(false)
 const chatError = ref("")
 const currentFilter = ref<Record<string, unknown> | null>(null)
 let currentSeedSummaries: Record<string, unknown>[] = []
+const promptHistory = ref<string[]>([])
 
 const playingJamendoId = ref<string | null>(null)
 let audioEl: HTMLAudioElement | null = null
@@ -188,6 +189,7 @@ function selectUser(user: User) {
   chatError.value = ""
   currentFilter.value = null
   currentSeedSummaries = []
+  promptHistory.value = []
   if (audioEl) { audioEl.pause(); audioEl = null }
   playingJamendoId.value = null
   clearModelOutput()
@@ -347,8 +349,15 @@ function formatExplanations(explanations: TrackExplanation[], similar: typeof si
   return explanations.map((exp, i) => {
     const track = similar.find((t) => t.track.id === exp.id)
     const title = track ? getSimilarTrackTitle(track) : exp.id
-    return `${i + 1}. ${title} — ${exp.explanation}`
-  }).join("\n")
+    return `**${i + 1}. ${title}**\n${exp.explanation}`
+  }).join("\n\n")
+}
+
+function renderMarkdown(text: string): string {
+  return text
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\n/g, "<br>")
 }
 
 async function generateSummary() {
@@ -396,16 +405,9 @@ async function sendChatMessage() {
   chatError.value = ""
 
   try {
-    const currentSummaries = similarTracks.value.map((item) => ({}))
-    const { filter, reasoning } = await refineToFilter(message, currentSeedSummaries, currentSummaries)
-    currentFilter.value = filter
-    chatMessages.value.push({ role: "assistant", text: reasoning, filter })
-
-    const result = await findSimilarLibraryTracks(
-      selectedSeedTracks.value.map((t) => t.cyanite_id),
-      10,
-      filter,
-    )
+    promptHistory.value.push(message)
+    const combinedQuery = promptHistory.value.join(", and also ")
+    const result = await searchByPrompt(combinedQuery, 10)
     similarTracks.value = result.items ?? []
     void enrichSimilarTrackNames(similarTracks.value)
     await generateSummary()
@@ -425,6 +427,7 @@ async function fetchSimilarTracks() {
   chatMessages.value = []
   chatError.value = ""
   currentFilter.value = null
+  promptHistory.value = []
 
   try {
     const result = await findSimilarLibraryTracks(
@@ -512,7 +515,7 @@ function formatDuration(seconds: number) {
             <div class="min-w-0">
               <h2 class="text-sm font-semibold">Liked Tracks</h2>
               <p class="mt-1 truncate text-sm text-muted-foreground">
-                Liked by <span class="font-mono">{{ selectedUser?.user_id }}</span>
+                Liked by user <span class="font-mono">{{ selectedUser?.user_id }}</span>
               </p>
             </div>
             <Badge variant="outline" class="shrink-0">
@@ -671,17 +674,12 @@ function formatDuration(seconds: number) {
                     :class="msg.role === 'user' ? 'justify-end' : 'justify-start'"
                   >
                     <div
-                      class="max-w-[85%] space-y-1 rounded-lg px-3 py-2 text-sm whitespace-pre-line"
+                      class="max-w-[85%] space-y-1 rounded-lg px-3 py-2 text-sm"
                       :class="msg.role === 'user'
                         ? 'bg-primary text-primary-foreground'
                         : 'bg-muted text-foreground'"
-                    >
-                      {{ msg.text }}
-                      <pre
-                        v-if="msg.filter"
-                        class="mt-1 overflow-x-auto rounded border bg-background/60 p-2 font-mono text-xs text-foreground"
-                      >{{ JSON.stringify(msg.filter, null, 2) }}</pre>
-                    </div>
+                      v-html="renderMarkdown(msg.text)"
+                    />
                   </div>
 
                   <div v-if="isChatLoading" class="flex justify-start">

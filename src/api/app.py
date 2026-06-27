@@ -460,6 +460,29 @@ def refine_filter() -> HTTPResponse:
         return json_response({"error": error.message}, error.status_code)
 
 
+@app.post("/api/prompt-search")
+def prompt_search() -> HTTPResponse:
+    try:
+        payload = get_json_body()
+        query = payload.get("query", "").strip()
+        if not query:
+            raise ApiError(400, "query is required.")
+        limit = parse_limit(payload)
+
+        status_code, cyanite_data = post_cyanite_json(
+            "/private-alpha/library-tracks/search",
+            {"limit": limit},
+            {"query": query},
+        )
+
+        if status_code < 200 or status_code >= 300:
+            return json_response(cyanite_data, status_code)
+
+        return json_response(normalize_similar_tracks_response(cyanite_data, [], limit))
+    except ApiError as error:
+        return json_response({"error": error.message}, error.status_code)
+
+
 @app.post("/api/track-summary")
 def track_summary() -> HTTPResponse:
     try:

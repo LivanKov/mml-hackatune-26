@@ -110,6 +110,21 @@ export async function findSimilarLibraryTracks(
   return data
 }
 
+export async function searchByPrompt(query: string, limit = 10): Promise<SimilarTracksResponse> {
+  const response = await fetch("/api/prompt-search", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ query, limit }),
+  })
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => null) as { error?: string } | null
+    throw new Error(error?.error ?? "Could not search by prompt.")
+  }
+
+  return await response.json() as SimilarTracksResponse
+}
+
 export async function getLibraryTrackModels(libraryTrackId: string) {
   const cached = libraryTrackModelsCache.get(libraryTrackId)
 
