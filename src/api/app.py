@@ -18,9 +18,9 @@ APP_DIR = Path(__file__).resolve().parent
 REPO_ROOT = APP_DIR.parents[1]
 CYANITE_BASE_URL = "https://rest-api.cyanite.ai/v1"
 OPENAI_BASE_URL = "https://api.openai.com/v1"
-DEFAULT_LIMIT = 20
+DEFAULT_LIMIT = 10
 MAX_LIMIT = 50
-MAX_SEED_TRACKS = 10
+MAX_SEED_TRACKS = 5
 
 app = Bottle()
 
