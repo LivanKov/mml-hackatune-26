@@ -11,3 +11,5 @@ __pycache__/
 
 # python venv
 .venv/
+
+/notebooks/cyanite_model_outputs.ipynb
