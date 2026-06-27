@@ -1,6 +1,17 @@
 <script setup lang="ts">
 import { computed, ref } from "vue"
-import { Clock, Disc3, ExternalLink, Hash, Music2, UserRound } from "lucide-vue-next"
+import {
+  AlertCircle,
+  Check,
+  Clock,
+  Disc3,
+  ExternalLink,
+  Hash,
+  Loader2,
+  Music2,
+  Sparkles,
+  UserRound,
+} from "lucide-vue-next"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -11,14 +22,20 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { findSimilarLibraryTracks, type SimilarTrackItem } from "@/lib/cyanite"
 import { tracks } from "@/lib/tracks"
 import { users, type User } from "@/lib/users"
 
 const tracksById = new Map(tracks.map((track) => [track.track_id, track]))
+const tracksByCyaniteId = new Map(tracks.map((track) => [track.cyanite_id, track]))
 
 const selectedUserId = ref(users[0]?.user_id ?? "")
 const listScrollTop = ref(0)
 const trackListRef = ref<HTMLElement | null>(null)
+const selectedSeedTrackIds = ref<string[]>([])
+const similarTracks = ref<SimilarTrackItem[]>([])
+const similarError = ref("")
+const isFindingSimilar = ref(false)
 
 const trackRowHeight = 60
 const overscanRows = 6
@@ -35,6 +52,17 @@ const selectedTrack = computed(
   () =>
     likedTracks.value.find((track) => track.track_id === selectedTrackId.value) ??
     likedTracks.value[0],
+)
+
+const selectedSeedTracks = computed(() =>
+  selectedSeedTrackIds.value.flatMap((trackId) => {
+    const track = tracksById.get(trackId)
+    return track ? [track] : []
+  }),
+)
+
+const canFindSimilarTracks = computed(
+  () => selectedSeedTracks.value.length > 0 && !isFindingSimilar.value,
 )
 
 const totalListHeight = computed(() => likedTracks.value.length * trackRowHeight)
@@ -71,6 +99,66 @@ function selectUser(user: User) {
     trackListRef.value.scrollTop = 0
   }
   selectedTrackId.value = getLikedTracks(user)[0]?.track_id ?? ""
+  selectedSeedTrackIds.value = []
+  similarTracks.value = []
+  similarError.value = ""
+}
+
+function isTrackSelected(trackId: string) {
+  return selectedSeedTrackIds.value.includes(trackId)
+}
+
+function toggleSeedTrack(trackId: string) {
+  selectedTrackId.value = trackId
+
+  if (isTrackSelected(trackId)) {
+    selectedSeedTrackIds.value = selectedSeedTrackIds.value.filter((id) => id !== trackId)
+    similarTracks.value = []
+    similarError.value = ""
+    return
+  }
+
+  if (selectedSeedTrackIds.value.length >= 10) {
+    similarError.value = "Select up to 10 liked tracks."
+    return
+  }
+
+  selectedSeedTrackIds.value = [...selectedSeedTrackIds.value, trackId]
+  similarTracks.value = []
+  similarError.value = ""
+}
+
+function getSimilarTrackLocalMatch(item: SimilarTrackItem) {
+  return tracksByCyaniteId.get(item.track.id)
+}
+
+function getSimilarTrackTitle(item: SimilarTrackItem) {
+  return getSimilarTrackLocalMatch(item)?.name ?? item.track.title ?? item.track.id
+}
+
+function getSimilarTrackArtist(item: SimilarTrackItem) {
+  return getSimilarTrackLocalMatch(item)?.artist_name ?? "Cyanite library track"
+}
+
+async function fetchSimilarTracks() {
+  if (!canFindSimilarTracks.value) {
+    return
+  }
+
+  isFindingSimilar.value = true
+  similarError.value = ""
+
+  try {
+    const result = await findSimilarLibraryTracks(
+      selectedSeedTracks.value.map((track) => track.cyanite_id),
+      20,
+    )
+    similarTracks.value = result.items ?? []
+  } catch (error) {
+    similarError.value = error instanceof Error ? error.message : "Could not fetch similar tracks."
+  } finally {
+    isFindingSimilar.value = false
+  }
 }
 
 function formatDuration(seconds: number) {
@@ -125,11 +213,16 @@ function formatDuration(seconds: number) {
         </section>
 
         <section class="flex h-[520px] min-h-0 flex-col rounded-lg border bg-card lg:h-full">
-          <div class="border-b p-4">
-            <h2 class="text-sm font-semibold">Track IDs</h2>
-            <p class="mt-1 truncate text-sm text-muted-foreground">
-              Liked by <span class="font-mono">{{ selectedUser?.user_id }}</span>
-            </p>
+          <div class="flex items-start justify-between gap-3 border-b p-4">
+            <div class="min-w-0">
+              <h2 class="text-sm font-semibold">Liked Track IDs</h2>
+              <p class="mt-1 truncate text-sm text-muted-foreground">
+                Liked by <span class="font-mono">{{ selectedUser?.user_id }}</span>
+              </p>
+            </div>
+            <Badge variant="outline" class="shrink-0">
+              {{ selectedSeedTrackIds.length }}/10
+            </Badge>
           </div>
 
           <div
@@ -151,14 +244,39 @@ function formatDuration(seconds: number) {
                   <Button
                     type="button"
                     variant="ghost"
+                    :aria-pressed="isTrackSelected(track.track_id)"
                     class="h-full w-full justify-start gap-3 px-3 py-2 text-left"
-                    :class="selectedTrack?.track_id === track.track_id ? 'bg-accent text-accent-foreground' : ''"
-                    @click="selectedTrackId = track.track_id"
+                    :class="[
+                      isTrackSelected(track.track_id)
+                        ? 'bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground'
+                        : '',
+                      selectedTrack?.track_id === track.track_id && !isTrackSelected(track.track_id)
+                        ? 'bg-accent text-accent-foreground'
+                        : '',
+                    ]"
+                    @click="toggleSeedTrack(track.track_id)"
                   >
-                    <Hash class="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <span
+                      class="flex h-5 w-5 shrink-0 items-center justify-center rounded border"
+                      :class="isTrackSelected(track.track_id)
+                        ? 'border-primary-foreground bg-primary-foreground text-primary'
+                        : 'border-border text-muted-foreground'"
+                    >
+                      <Check
+                        v-if="isTrackSelected(track.track_id)"
+                        class="h-3.5 w-3.5"
+                        aria-hidden="true"
+                      />
+                      <Hash v-else class="h-3.5 w-3.5" aria-hidden="true" />
+                    </span>
                     <span class="min-w-0">
                       <span class="block truncate font-mono text-sm">{{ track.track_id }}</span>
-                      <span class="block truncate text-xs font-normal text-muted-foreground">
+                      <span
+                        class="block truncate text-xs font-normal"
+                        :class="isTrackSelected(track.track_id)
+                          ? 'text-primary-foreground/80'
+                          : 'text-muted-foreground'"
+                      >
                         {{ track.name }}
                       </span>
                     </span>
@@ -170,59 +288,165 @@ function formatDuration(seconds: number) {
         </section>
 
         <section class="min-h-[420px]">
-          <Card v-if="selectedTrack" class="h-full">
+          <Card class="h-full">
             <CardHeader>
               <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div class="min-w-0">
-                  <CardDescription>Selected track</CardDescription>
-                  <CardTitle class="mt-2 break-words">{{ selectedTrack.name }}</CardTitle>
+                  <CardDescription>Recommendation seeds</CardDescription>
+                  <CardTitle class="mt-2 break-words">Similar tracks</CardTitle>
                 </div>
-                <Badge variant="outline" class="w-fit font-mono">
-                  {{ selectedTrack.track_id }}
-                </Badge>
+                <Button
+                  type="button"
+                  class="w-fit gap-2"
+                  :disabled="!canFindSimilarTracks"
+                  @click="fetchSimilarTracks"
+                >
+                  <Loader2
+                    v-if="isFindingSimilar"
+                    class="h-4 w-4 animate-spin"
+                    aria-hidden="true"
+                  />
+                  <Sparkles v-else class="h-4 w-4" aria-hidden="true" />
+                  {{ isFindingSimilar ? "Finding" : "Find similar" }}
+                </Button>
               </div>
             </CardHeader>
 
-            <CardContent>
-              <dl class="grid gap-4 sm:grid-cols-2">
-                <div class="rounded-md border p-4">
-                  <dt class="text-sm font-medium text-muted-foreground">Artist</dt>
-                  <dd class="mt-2 text-lg font-semibold">{{ selectedTrack.artist_name }}</dd>
+            <CardContent class="space-y-6">
+              <section class="space-y-3">
+                <div class="flex flex-wrap gap-2">
+                  <Badge variant="outline">
+                    {{ selectedSeedTracks.length }} selected
+                  </Badge>
+                  <Badge v-if="selectedUser" variant="secondary" class="font-mono">
+                    {{ selectedUser.user_id }}
+                  </Badge>
                 </div>
 
-                <div class="rounded-md border p-4">
-                  <dt class="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-                    <Clock class="h-4 w-4" aria-hidden="true" />
-                    Duration
-                  </dt>
-                  <dd class="mt-2 text-lg font-semibold">
-                    {{ formatDuration(selectedTrack.duration) }}
-                  </dd>
+                <div
+                  v-if="selectedSeedTracks.length"
+                  class="flex max-h-24 flex-wrap gap-2 overflow-y-auto"
+                >
+                  <Badge
+                    v-for="track in selectedSeedTracks"
+                    :key="track.track_id"
+                    variant="secondary"
+                    class="max-w-full gap-1 font-mono"
+                  >
+                    <span class="truncate">{{ track.track_id }}</span>
+                  </Badge>
+                </div>
+              </section>
+
+              <div
+                v-if="similarError"
+                class="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+              >
+                <AlertCircle class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                <span>{{ similarError }}</span>
+              </div>
+
+              <section class="space-y-3">
+                <div class="flex items-center justify-between gap-3">
+                  <h2 class="text-sm font-semibold">Similar Tracks</h2>
+                  <Badge variant="outline">
+                    {{ similarTracks.length }}
+                  </Badge>
                 </div>
 
-                <div class="rounded-md border p-4 sm:col-span-2">
-                  <dt class="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-                    <Disc3 class="h-4 w-4" aria-hidden="true" />
-                    Cyanite ID
-                  </dt>
-                  <dd class="mt-2 break-all font-mono text-sm">{{ selectedTrack.cyanite_id }}</dd>
+                <div
+                  v-if="isFindingSimilar"
+                  class="flex min-h-32 items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground"
+                >
+                  <Loader2 class="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
+                  Finding similar tracks
                 </div>
 
-                <div class="rounded-md border p-4 sm:col-span-2">
-                  <dt class="text-sm font-medium text-muted-foreground">License</dt>
-                  <dd class="mt-2">
-                    <a
-                      :href="selectedTrack.license_ccurl"
-                      target="_blank"
-                      rel="noreferrer"
-                      class="inline-flex max-w-full items-center gap-2 text-sm font-medium text-primary underline-offset-4 hover:underline"
-                    >
-                      <span class="truncate">{{ selectedTrack.license_ccurl }}</span>
-                      <ExternalLink class="h-4 w-4 shrink-0" aria-hidden="true" />
-                    </a>
-                  </dd>
+                <div v-else-if="similarTracks.length" class="divide-y rounded-md border">
+                  <div
+                    v-for="item in similarTracks"
+                    :key="item.track.id"
+                    class="p-3"
+                  >
+                    <div class="flex items-start justify-between gap-3">
+                      <div class="min-w-0">
+                        <div class="truncate text-sm font-medium">
+                          {{ getSimilarTrackTitle(item) }}
+                        </div>
+                        <div class="mt-1 truncate text-xs text-muted-foreground">
+                          {{ getSimilarTrackArtist(item) }}
+                        </div>
+                      </div>
+                      <Badge
+                        v-if="typeof item.score === 'number'"
+                        variant="outline"
+                        class="shrink-0 font-mono"
+                      >
+                        {{ item.score.toFixed(3) }}
+                      </Badge>
+                    </div>
+                    <div class="mt-2 truncate font-mono text-xs text-muted-foreground">
+                      {{ item.track.id }}
+                    </div>
+                  </div>
                 </div>
-              </dl>
+
+                <div
+                  v-else
+                  class="flex min-h-32 items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground"
+                >
+                  No similar tracks yet
+                </div>
+              </section>
+
+              <section v-if="selectedTrack" class="border-t pt-5">
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div class="min-w-0">
+                    <h2 class="truncate text-sm font-semibold">{{ selectedTrack.name }}</h2>
+                    <p class="mt-1 truncate text-sm text-muted-foreground">
+                      {{ selectedTrack.artist_name }}
+                    </p>
+                  </div>
+                  <Badge variant="outline" class="w-fit shrink-0 font-mono">
+                    {{ selectedTrack.track_id }}
+                  </Badge>
+                </div>
+
+                <dl class="mt-4 grid gap-3 sm:grid-cols-2">
+                  <div class="rounded-md border p-3">
+                    <dt class="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                      <Clock class="h-4 w-4" aria-hidden="true" />
+                      Duration
+                    </dt>
+                    <dd class="mt-2 text-sm font-semibold">
+                      {{ formatDuration(selectedTrack.duration) }}
+                    </dd>
+                  </div>
+
+                  <div class="rounded-md border p-3">
+                    <dt class="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                      <Disc3 class="h-4 w-4" aria-hidden="true" />
+                      Cyanite ID
+                    </dt>
+                    <dd class="mt-2 truncate font-mono text-sm">{{ selectedTrack.cyanite_id }}</dd>
+                  </div>
+
+                  <div class="rounded-md border p-3 sm:col-span-2">
+                    <dt class="text-xs font-medium text-muted-foreground">License</dt>
+                    <dd class="mt-2">
+                      <a
+                        :href="selectedTrack.license_ccurl"
+                        target="_blank"
+                        rel="noreferrer"
+                        class="inline-flex max-w-full items-center gap-2 text-sm font-medium text-primary underline-offset-4 hover:underline"
+                      >
+                        <span class="truncate">{{ selectedTrack.license_ccurl }}</span>
+                        <ExternalLink class="h-4 w-4 shrink-0" aria-hidden="true" />
+                      </a>
+                    </dd>
+                  </div>
+                </dl>
+              </section>
             </CardContent>
           </Card>
         </section>
