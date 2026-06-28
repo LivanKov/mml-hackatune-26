@@ -670,6 +670,10 @@ function formatDuration(seconds: number) {
                   <AlertCircle class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                   <span>{{ chatError }}</span>
                 </div>
+                <div class="rounded-md border bg-muted/30 p-3">
+                  <div class="text-sm font-medium text-foreground">Recommendation summary</div>
+                  <p class="mt-1 text-sm text-muted-foreground">No summary yet.</p>
+                </div>
                 <div class="flex gap-2">
                   <input
                     v-model="chatInput"
