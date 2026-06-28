@@ -57,6 +57,7 @@ Browser (Vue 3 + Vite)
 - Node.js 18+
 - A Cyanite API key (issued by the HACKATUNE organizers)
 - An OpenAI API key (for AI-generated explanations)
+- Mock data from the original repository: https://github.com/cyanite-ai/mml-hackatune-26
 
 ### 2. Environment
 
@@ -66,6 +67,13 @@ cp .env.sample .env
 # CYANITE_API_KEY=<your key>
 # OPENAI_API_KEY=<your key>
 ```
+
+- Copy the data
+  - git clone https://github.com/cyanite-ai/mml-hackatune-26
+  - cp -r mml-hackatune-26/data .
+  - rm -rf mml-hackatune-26
+  - git clone https://github.com/LivanKov/mml-hackatune-26
+  - cp -r data mml-hackatune-26/
 
 ### 3. Run
 
