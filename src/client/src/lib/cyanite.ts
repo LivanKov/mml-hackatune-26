@@ -1,6 +1,7 @@
 export interface CyaniteLibraryTrack {
   id: string
   title?: string
+  externalId?: string
 }
 
 export interface SimilarTrackItem {

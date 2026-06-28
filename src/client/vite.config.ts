@@ -2,7 +2,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import vue from "@vitejs/plugin-vue"
-import { defineConfig, loadEnv } from "vite"
+import { defineConfig, loadEnv, type ProxyOptions } from "vite"
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(dirname, "../..")
@@ -12,6 +12,17 @@ export default defineConfig(({ mode }) => {
   const apiUrl = env.VITE_API_URL || env.VITE_BACKEND_URL || "http://127.0.0.1:8001"
   const cyaniteApiKey = env.VITE_CYANITE_API_KEY || env.CYANITE_API_KEY || ""
   const cyaniteBaseUrl = "https://rest-api.cyanite.ai/v1"
+  const jamendoAudioProxy: ProxyOptions = {
+    target: "https://prod-1.storage.jamendo.com",
+    changeOrigin: true,
+    rewrite: (requestPath: string) => requestPath.replace(/^\/jamendo-audio/, ""),
+    configure: (proxy) => {
+      proxy.on("proxyRes", (proxyRes) => {
+        proxyRes.headers["content-type"] = "audio/mpeg"
+        proxyRes.headers["content-disposition"] = "inline"
+      })
+    },
+  }
   const proxy = {
     "/api": {
       target: apiUrl,
@@ -23,6 +34,7 @@ export default defineConfig(({ mode }) => {
       headers: cyaniteApiKey ? { "x-api-key": cyaniteApiKey } : {},
       rewrite: (requestPath: string) => requestPath.replace(/^\/cyanite/, ""),
     },
+    "/jamendo-audio": jamendoAudioProxy,
     "/jamendo": {
       target: "https://api.jamendo.com",
       changeOrigin: true,

@@ -295,6 +295,9 @@ def normalize_similar_tracks_response(
         if isinstance(track.get("title"), str):
             normalized_item["track"]["title"] = track["title"]
 
+        if isinstance(track.get("externalId"), str):
+            normalized_item["track"]["externalId"] = track["externalId"]
+
         score = item.get("score")
         if isinstance(score, (int, float)) and not isinstance(score, bool):
             normalized_item["score"] = score
