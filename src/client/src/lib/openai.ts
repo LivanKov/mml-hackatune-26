@@ -16,6 +16,15 @@ export interface TrackExplanation {
   explanation: string
 }
 
+export type RecommendationTraitBucket = "high" | "medium" | "low"
+
+export interface RecommendationTraitSummaryModel {
+  model: string
+  score: number
+  seedValues: unknown[]
+  recommendationValues: unknown[]
+}
+
 export async function generateSimilarTrackSummary(
   seedSummaries: Record<string, unknown>[],
   tracks: Array<{ id: string; title: string; artist: string; summary: Record<string, unknown> }>,
@@ -32,6 +41,24 @@ export async function generateSimilarTrackSummary(
   }
 
   return await response.json() as { explanations: TrackExplanation[] }
+}
+
+export async function generateRecommendationTraitBucketSummary(
+  bucket: RecommendationTraitBucket,
+  models: RecommendationTraitSummaryModel[],
+): Promise<{ bucket: RecommendationTraitBucket; summary: string }> {
+  const response = await fetch("/api/recommendation-trait-summary", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ bucket, models }),
+  })
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => null) as { error?: string } | null
+    throw new Error(error?.error ?? "Could not generate recommendation trait summary.")
+  }
+
+  return await response.json() as { bucket: RecommendationTraitBucket; summary: string }
 }
 
 export async function refineToFilter(

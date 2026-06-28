@@ -33,7 +33,10 @@ import {
 import { jamendoMp3Url, toJamendoId, type PlayableTrack } from "@/lib/audio"
 import { fetchJamendoTracks, type JamendoTrack } from "@/lib/jamendo"
 import {
+  generateRecommendationTraitBucketSummary,
   generateSimilarTrackSummary,
+  type RecommendationTraitBucket,
+  type RecommendationTraitSummaryModel,
 } from "@/lib/openai"
 import { tracks, type Track } from "@/lib/tracks"
 import { users, type User } from "@/lib/users"
@@ -46,6 +49,46 @@ interface ModelOutputTarget {
   source: "Liked track" | "Similar track"
   localTrackId?: string
 }
+
+interface RecommendationTraitRanking {
+  model: string
+  score: number
+  comparedPairs: number
+}
+
+interface RecommendationAiSummaryBucket {
+  id: RecommendationTraitBucket
+  title: string
+  range: string
+  containerClass: string
+  textClass: string
+}
+
+type RecommendationSummaryTab = "trait-ranking" | "ai-summary"
+
+const recommendationAiSummaryBuckets: RecommendationAiSummaryBucket[] = [
+  {
+    id: "high",
+    title: "Strongly preserved",
+    range: "66-100%",
+    containerClass: "border-green-200 bg-green-50",
+    textClass: "text-green-950",
+  },
+  {
+    id: "medium",
+    title: "Partially preserved",
+    range: "33-66%",
+    containerClass: "border-yellow-200 bg-yellow-50",
+    textClass: "text-yellow-950",
+  },
+  {
+    id: "low",
+    title: "Potentially neglected",
+    range: "0-33%",
+    containerClass: "border-red-200 bg-red-50",
+    textClass: "text-red-950",
+  },
+]
 
 const tracksById = new Map(tracks.map((track) => [track.track_id, track]))
 const tracksByCyaniteId = new Map(tracks.map((track) => [track.cyanite_id, track]))
@@ -67,8 +110,21 @@ const isChatLoading = ref(false)
 const chatError = ref("")
 const currentFilter = ref<Record<string, unknown> | null>(null)
 let currentSeedSummaries: Record<string, unknown>[] = []
+let currentRecommendationSummaries: Record<string, unknown>[] = []
 const promptHistory = ref<string[]>([])
 const trackExplanations = ref<Record<string, string>>({})
+const recommendationTraitRankings = ref<RecommendationTraitRanking[]>([])
+const recommendationSummaryTab = ref<RecommendationSummaryTab>("trait-ranking")
+const recommendationAiSummaries = ref<Record<RecommendationTraitBucket, string>>({
+  high: "",
+  medium: "",
+  low: "",
+})
+const recommendationAiSummaryError = ref("")
+const isFetchingRecommendationAiSummary = ref(false)
+const isRankingRecommendationTraits = ref(false)
+let recommendationSummaryRequestId = 0
+let recommendationAiSummaryRequestId = 0
 
 const trackColorMap = ref<Record<string, string>>({})
 const hoveredTrackId = ref<string | null>(null)
@@ -219,6 +275,7 @@ function selectUser(user: User) {
   currentSeedSummaries = []
   promptHistory.value = []
   trackExplanations.value = {}
+  clearRecommendationSummary(true)
   audioError.value = ""
   stopAudio()
   clearModelOutput()
@@ -230,6 +287,7 @@ function isTrackSelected(trackId: string) {
 
 function toggleSeedTrack(trackId: string) {
   selectedTrackId.value = trackId
+  clearRecommendationSummary(true)
 
   if (isTrackSelected(trackId)) {
     selectedSeedTrackIds.value = selectedSeedTrackIds.value.filter((id) => id !== trackId)
@@ -276,6 +334,36 @@ function getSimilarTrackArtist(item: SimilarTrackItem) {
   return ""
 }
 
+function getModelDisplayValue(item: Record<string, unknown>) {
+  const singleValueKeys = [
+    "tags",
+    "tag",
+    "description",
+    "value",
+    "scores",
+    "energyLevel",
+    "energyChanges",
+    "emotionProfile",
+    "emotionChanges",
+    "vocalPresence",
+    "predominantVocalGender",
+    "voiceoverDegree",
+    "isVoiceoverDominant",
+  ]
+
+  let hasNullValue = false
+  for (const key of singleValueKeys) {
+    if (item[key] === undefined) continue
+    if (item[key] === null) {
+      hasNullValue = true
+      continue
+    }
+    return item[key]
+  }
+
+  return hasNullValue ? null : undefined
+}
+
 function summarizeModelOutputs(data: unknown): Record<string, unknown> {
   const items: unknown[] = []
 
@@ -300,16 +388,259 @@ function summarizeModelOutputs(data: unknown): Record<string, unknown> {
     if (!mo || typeof mo !== "object" || Array.isArray(mo)) continue
     const item = mo as Record<string, unknown>
     const version = typeof item.version === "string" ? item.version : "?"
-    if (item.tags !== undefined) {
-      summary[version] = item.tags
-    } else if ("tag" in item) {
-      summary[version] = item.tag
-    } else if ("description" in item) {
-      summary[version] = item.description
+    const value = getModelDisplayValue(item)
+    if (value !== undefined) {
+      summary[version] = value
     }
   }
 
   return summary
+}
+
+function splitComparableTokens(value: string) {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+}
+
+function stringSimilarity(a: string, b: string) {
+  const normalizedA = a.trim().toLowerCase()
+  const normalizedB = b.trim().toLowerCase()
+  if (!normalizedA || !normalizedB) return null
+  if (normalizedA === normalizedB) return 1
+
+  const aTokens = new Set(splitComparableTokens(normalizedA))
+  const bTokens = new Set(splitComparableTokens(normalizedB))
+  if (!aTokens.size || !bTokens.size) return 0
+
+  const intersection = [...aTokens].filter((token) => bTokens.has(token)).length
+  const union = new Set([...aTokens, ...bTokens]).size
+
+  return union ? intersection / union : 0
+}
+
+function numberSimilarity(a: number, b: number) {
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null
+  const scale = Math.max(Math.abs(a), Math.abs(b), 1)
+
+  return Math.max(0, 1 - Math.abs(a - b) / scale)
+}
+
+function arraySimilarity(a: unknown[], b: unknown[]): number | null {
+  if (!a.length || !b.length) return null
+
+  const aScores = a
+    .map((aValue) => Math.max(...b.map((bValue) => compareModelValues(aValue, bValue) ?? 0)))
+    .filter(Number.isFinite)
+  const bScores = b
+    .map((bValue) => Math.max(...a.map((aValue) => compareModelValues(aValue, bValue) ?? 0)))
+    .filter(Number.isFinite)
+
+  const coverageScores = [...aScores, ...bScores]
+  if (!coverageScores.length) return null
+
+  return coverageScores.reduce((sum, score) => sum + score, 0) / coverageScores.length
+}
+
+function objectSimilarity(a: Record<string, unknown>, b: Record<string, unknown>): number | null {
+  const keys = [...new Set([...Object.keys(a), ...Object.keys(b)])]
+  const scores = keys.flatMap((key) => {
+    if (!(key in a) || !(key in b)) return []
+    const score = compareModelValues(a[key], b[key])
+    return score === null ? [] : [score]
+  })
+
+  if (!scores.length) return null
+
+  return scores.reduce((sum, score) => sum + score, 0) / scores.length
+}
+
+function compareModelValues(a: unknown, b: unknown): number | null {
+  if (a === null || a === undefined || b === null || b === undefined) return null
+
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return arraySimilarity(Array.isArray(a) ? a : [a], Array.isArray(b) ? b : [b])
+  }
+
+  if (typeof a === "number" && typeof b === "number") {
+    return numberSimilarity(a, b)
+  }
+
+  if (typeof a === "boolean" && typeof b === "boolean") {
+    return a === b ? 1 : 0
+  }
+
+  if (typeof a === "string" && typeof b === "string") {
+    return stringSimilarity(a, b)
+  }
+
+  if (
+    typeof a === "object" &&
+    typeof b === "object" &&
+    !Array.isArray(a) &&
+    !Array.isArray(b)
+  ) {
+    return objectSimilarity(a as Record<string, unknown>, b as Record<string, unknown>)
+  }
+
+  return stringSimilarity(String(a), String(b))
+}
+
+function rankRecommendationTraits(
+  seedSummaries: Record<string, unknown>[],
+  recommendationSummaries: Record<string, unknown>[],
+): RecommendationTraitRanking[] {
+  const modelNames = new Set<string>()
+  seedSummaries.forEach((summary) => Object.keys(summary).forEach((model) => modelNames.add(model)))
+  recommendationSummaries.forEach((summary) =>
+    Object.keys(summary).forEach((model) => modelNames.add(model)),
+  )
+
+  return [...modelNames]
+    .flatMap((model) => {
+      const scores: number[] = []
+
+      for (const seedSummary of seedSummaries) {
+        for (const recommendationSummary of recommendationSummaries) {
+          const score = compareModelValues(seedSummary[model], recommendationSummary[model])
+          if (score !== null) scores.push(score)
+        }
+      }
+
+      if (!scores.length) return []
+
+      return [{
+        model,
+        score: scores.reduce((sum, score) => sum + score, 0) / scores.length,
+        comparedPairs: scores.length,
+      }]
+    })
+    .sort((a, b) => b.score - a.score || a.model.localeCompare(b.model))
+}
+
+function isTraitInBucket(score: number, bucket: RecommendationTraitBucket) {
+  if (bucket === "high") return score >= 0.66
+  if (bucket === "medium") return score >= 0.33 && score < 0.66
+  return score >= 0 && score < 0.33
+}
+
+function compactValueForAi(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.slice(0, 8).map((item) => compactValueForAi(item))
+  }
+
+  if (typeof value === "string") {
+    return value.length > 180 ? `${value.slice(0, 177)}...` : value
+  }
+
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .slice(0, 8)
+        .map(([key, nestedValue]) => [key, compactValueForAi(nestedValue)]),
+    )
+  }
+
+  return value
+}
+
+function compactUniqueValuesForAi(values: unknown[]) {
+  const seen = new Set<string>()
+  const compacted: unknown[] = []
+
+  for (const value of values) {
+    const compactValue = compactValueForAi(value)
+    const key = JSON.stringify(compactValue) ?? String(compactValue)
+    if (seen.has(key)) continue
+
+    seen.add(key)
+    compacted.push(compactValue)
+    if (compacted.length >= 5) break
+  }
+
+  return compacted
+}
+
+function buildRecommendationTraitSummaryModels(
+  bucket: RecommendationTraitBucket,
+): RecommendationTraitSummaryModel[] {
+  return recommendationTraitRankings.value
+    .filter((ranking) => isTraitInBucket(ranking.score, bucket))
+    .map((ranking) => ({
+      model: ranking.model,
+      score: ranking.score,
+      seedValues: compactUniqueValuesForAi(
+        currentSeedSummaries.map((summary) => summary[ranking.model]),
+      ),
+      recommendationValues: compactUniqueValuesForAi(
+        currentRecommendationSummaries.map((summary) => summary[ranking.model]),
+      ),
+    }))
+}
+
+async function fetchRecommendationAiSummaries() {
+  if (isRankingRecommendationTraits.value || isFetchingRecommendationAiSummary.value) return
+
+  const requestId = recommendationAiSummaryRequestId + 1
+  recommendationAiSummaryRequestId = requestId
+  isFetchingRecommendationAiSummary.value = true
+  recommendationAiSummaryError.value = ""
+  recommendationAiSummaries.value = { high: "", medium: "", low: "" }
+
+  const results = await Promise.all(
+    recommendationAiSummaryBuckets.map(async (bucket) => {
+      try {
+        const result = await generateRecommendationTraitBucketSummary(
+          bucket.id,
+          buildRecommendationTraitSummaryModels(bucket.id),
+        )
+        return { bucket: bucket.id, summary: result.summary, error: "" }
+      } catch (error) {
+        return {
+          bucket: bucket.id,
+          summary: "",
+          error: error instanceof Error ? error.message : "Could not generate AI summary.",
+        }
+      }
+    }),
+  )
+
+  if (requestId !== recommendationAiSummaryRequestId) return
+
+  const nextSummaries: Record<RecommendationTraitBucket, string> = { high: "", medium: "", low: "" }
+  const errors: string[] = []
+
+  for (const result of results) {
+    nextSummaries[result.bucket] = result.summary
+    if (result.error) errors.push(result.error)
+  }
+
+  recommendationAiSummaries.value = nextSummaries
+  recommendationAiSummaryError.value = [...new Set(errors)].join(" ")
+  isFetchingRecommendationAiSummary.value = false
+}
+
+function selectRecommendationSummaryTab(tab: RecommendationSummaryTab) {
+  recommendationSummaryTab.value = tab
+  if (tab === "ai-summary") {
+    void fetchRecommendationAiSummaries()
+  }
+}
+
+function clearRecommendationSummary(clearChatLoading = false) {
+  recommendationSummaryRequestId += 1
+  recommendationAiSummaryRequestId += 1
+  recommendationTraitRankings.value = []
+  currentRecommendationSummaries = []
+  recommendationAiSummaries.value = { high: "", medium: "", low: "" }
+  recommendationAiSummaryError.value = ""
+  isRankingRecommendationTraits.value = false
+  isFetchingRecommendationAiSummary.value = false
+  if (clearChatLoading) {
+    isChatLoading.value = false
+  }
 }
 
 function clearModelOutput() {
@@ -375,11 +706,14 @@ function selectSimilarTrack(item: SimilarTrackItem) {
 
 
 async function generateSummary() {
+  const requestId = recommendationSummaryRequestId + 1
+  recommendationSummaryRequestId = requestId
   const seeds = selectedSeedTracks.value
   const similar = similarTracks.value
   if (!seeds.length || !similar.length) return
 
   isChatLoading.value = true
+  isRankingRecommendationTraits.value = true
   chatError.value = ""
 
   try {
@@ -388,16 +722,36 @@ async function generateSummary() {
       Promise.all(similar.map((item) => getLibraryTrackModels(item.track.id).catch(() => null))),
     ])
 
-    currentSeedSummaries = seedOutputs.filter(Boolean).map((data) => summarizeModelOutputs(data))
+    if (requestId !== recommendationSummaryRequestId) return
+
+    const seedSummaries = seedOutputs
+      .filter((data): data is NonNullable<typeof data> => data !== null)
+      .map((data) => summarizeModelOutputs(data))
+    const recommendationSummaries = similarOutputs.map((data) =>
+      data ? summarizeModelOutputs(data) : {},
+    )
+
+    currentSeedSummaries = seedSummaries
+    currentRecommendationSummaries = recommendationSummaries
+    recommendationTraitRankings.value = rankRecommendationTraits(
+      seedSummaries,
+      recommendationSummaries,
+    )
+    isRankingRecommendationTraits.value = false
+    if (recommendationSummaryTab.value === "ai-summary") {
+      void fetchRecommendationAiSummaries()
+    }
 
     const tracks = similar.map((item, i) => ({
       id: item.track.id,
       title: getSimilarTrackTitle(item),
       artist: getSimilarTrackArtist(item),
-      summary: similarOutputs[i] ? summarizeModelOutputs(similarOutputs[i]) : {},
+      summary: recommendationSummaries[i] ?? {},
     }))
 
     const result = await generateSimilarTrackSummary(currentSeedSummaries, tracks)
+    if (requestId !== recommendationSummaryRequestId) return
+
     const explanations: Record<string, string> = {}
     result.explanations.forEach((exp, i) => {
       const track = similar[i]
@@ -407,7 +761,10 @@ async function generateSummary() {
   } catch (error) {
     chatError.value = error instanceof Error ? error.message : "Could not generate summary."
   } finally {
-    isChatLoading.value = false
+    if (requestId === recommendationSummaryRequestId) {
+      isChatLoading.value = false
+      isRankingRecommendationTraits.value = false
+    }
   }
 }
 
@@ -419,6 +776,7 @@ async function sendChatMessage() {
   isChatLoading.value = true
   chatError.value = ""
   trackExplanations.value = {}
+  clearRecommendationSummary()
 
   try {
     promptHistory.value.push(message)
@@ -444,6 +802,7 @@ async function fetchSimilarTracks() {
   currentFilter.value = null
   promptHistory.value = []
   trackExplanations.value = {}
+  clearRecommendationSummary(true)
 
   try {
     const result = await findSimilarLibraryTracks(
@@ -466,6 +825,10 @@ function formatDuration(seconds: number) {
   const remainingSeconds = seconds % 60
 
   return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`
+}
+
+function formatSimilarityScore(score: number) {
+  return `${Math.round(score * 100)}%`
 }
 </script>
 
@@ -672,7 +1035,107 @@ function formatDuration(seconds: number) {
                 </div>
                 <div class="rounded-md border bg-muted/30 p-3">
                   <div class="text-sm font-medium text-foreground">Recommendation summary</div>
-                  <p class="mt-1 text-sm text-muted-foreground">No summary yet.</p>
+                  <div
+                    class="mt-3 inline-flex rounded-md border bg-background p-0.5"
+                    role="tablist"
+                    aria-label="Recommendation summary views"
+                  >
+                    <button
+                      type="button"
+                      role="tab"
+                      class="rounded px-3 py-1.5 text-xs font-medium transition-colors"
+                      :class="recommendationSummaryTab === 'trait-ranking'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-muted-foreground hover:text-foreground'"
+                      :aria-selected="recommendationSummaryTab === 'trait-ranking'"
+                      @click="selectRecommendationSummaryTab('trait-ranking')"
+                    >
+                      Trait ranking
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      class="rounded px-3 py-1.5 text-xs font-medium transition-colors"
+                      :class="recommendationSummaryTab === 'ai-summary'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-muted-foreground hover:text-foreground'"
+                      :aria-selected="recommendationSummaryTab === 'ai-summary'"
+                      @click="selectRecommendationSummaryTab('ai-summary')"
+                    >
+                      AI summary
+                    </button>
+                  </div>
+                  <div v-if="recommendationSummaryTab === 'trait-ranking'">
+                    <p v-if="isRankingRecommendationTraits" class="mt-3 text-sm text-muted-foreground">
+                      Analyzing recommendation traits
+                    </p>
+                    <div
+                      v-else-if="recommendationTraitRankings.length"
+                      class="mt-3 max-h-56 space-y-2 overflow-y-auto pr-1"
+                    >
+                      <div
+                        v-for="trait in recommendationTraitRankings"
+                        :key="trait.model"
+                        class="space-y-1"
+                      >
+                        <div class="flex items-center justify-between gap-3 text-xs">
+                          <span class="min-w-0 truncate font-mono font-medium text-foreground">
+                            {{ trait.model }}
+                          </span>
+                          <span class="shrink-0 font-mono text-muted-foreground">
+                            {{ formatSimilarityScore(trait.score) }}
+                          </span>
+                        </div>
+                        <div class="h-1.5 overflow-hidden rounded-full bg-background">
+                          <div
+                            class="h-full rounded-full bg-primary"
+                            :style="{ width: formatSimilarityScore(trait.score) }"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    <p v-else class="mt-3 text-sm text-muted-foreground">
+                      No comparable model traits yet.
+                    </p>
+                  </div>
+                  <div
+                    v-else
+                    class="mt-3 min-h-20 space-y-2"
+                    role="tabpanel"
+                    aria-label="AI summary"
+                  >
+                    <p
+                      v-if="isRankingRecommendationTraits || isFetchingRecommendationAiSummary"
+                      class="text-sm text-muted-foreground"
+                    >
+                      Generating AI summaries
+                    </p>
+                    <div
+                      v-if="recommendationAiSummaryError"
+                      class="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+                    >
+                      <AlertCircle class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                      <span>{{ recommendationAiSummaryError }}</span>
+                    </div>
+                    <div
+                      v-for="bucket in recommendationAiSummaryBuckets"
+                      :key="bucket.id"
+                      class="rounded-md border p-3"
+                      :class="bucket.containerClass"
+                    >
+                      <div class="flex items-center justify-between gap-3">
+                        <div class="text-xs font-semibold" :class="bucket.textClass">
+                          {{ bucket.title }}
+                        </div>
+                        <div class="shrink-0 font-mono text-xs" :class="bucket.textClass">
+                          {{ bucket.range }}
+                        </div>
+                      </div>
+                      <p class="mt-2 text-sm leading-relaxed" :class="bucket.textClass">
+                        {{ recommendationAiSummaries[bucket.id] || " " }}
+                      </p>
+                    </div>
+                  </div>
                 </div>
                 <div class="flex gap-2">
                   <input

@@ -264,6 +264,48 @@ def build_track_summary_payload(seed_summaries: list[dict[str, Any]], tracks: li
     }
 
 
+def build_recommendation_trait_summary_payload(bucket: str, models: list[dict[str, Any]]) -> dict[str, Any]:
+    bucket_labels = {
+        "high": "66% to 100% similarity, strongly preserved traits",
+        "medium": "33% to 66% similarity, partially preserved traits",
+        "low": "0% to 33% similarity, potentially neglected traits",
+    }
+    return {
+        "model": MODEL,
+        "reasoning": {"effort": REASONING_EFFORT},
+        "instructions": (
+            "You are a music recommendation diagnostics assistant. Write exactly one plain-language "
+            "sentence for a listener, explaining what this similarity bucket says about the current "
+            "recommendations. Do not mention JSON, APIs, or implementation details."
+        ),
+        "input": (
+            f"Bucket: {bucket_labels[bucket]}\n"
+            f"Models in this bucket: {json.dumps(models, ensure_ascii=False)}\n\n"
+            "Scores compare the user's original liked-track audio traits against the displayed "
+            "recommendations. If this is the low bucket, emphasize which properties may have been "
+            "neglected. If this is the medium bucket, describe what is only partially represented. "
+            "If this is the high bucket, describe what is well preserved. If the model list is empty, "
+            "say that no traits fell into this range."
+        ),
+        "text": {
+            "verbosity": TEXT_VERBOSITY,
+            "format": {
+                "type": "json_schema",
+                "name": "recommendation_trait_summary",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "summary": {"type": "string"},
+                    },
+                    "required": ["summary"],
+                },
+            },
+        },
+    }
+
+
 def normalize_similar_tracks_response(
     data: Any,
     seed_track_ids: list[str],
@@ -512,6 +554,60 @@ def track_summary() -> HTTPResponse:
             raise ApiError(502, "OpenAI response was not valid JSON.") from error
 
         return json_response(result)
+    except ApiError as error:
+        return json_response({"error": error.message}, error.status_code)
+
+
+@app.post("/api/recommendation-trait-summary")
+def recommendation_trait_summary() -> HTTPResponse:
+    try:
+        payload = get_json_body()
+        bucket = payload.get("bucket")
+        models = payload.get("models", [])
+
+        if bucket not in {"high", "medium", "low"}:
+            raise ApiError(400, "bucket must be one of: high, medium, low.")
+        if not isinstance(models, list):
+            raise ApiError(400, "models must be a list.")
+
+        normalized_models: list[dict[str, Any]] = []
+        for raw_model in models[:30]:
+            if not isinstance(raw_model, dict):
+                continue
+            name = raw_model.get("model")
+            score = raw_model.get("score")
+            if not isinstance(name, str):
+                continue
+            if isinstance(score, bool) or not isinstance(score, (int, float)):
+                score = None
+
+            normalized_models.append({
+                "model": name,
+                "scorePercent": round(float(score) * 100) if score is not None else None,
+                "originalValues": raw_model.get("seedValues", []),
+                "recommendedValues": raw_model.get("recommendationValues", []),
+            })
+
+        openai_payload = build_recommendation_trait_summary_payload(bucket, normalized_models)
+        status_code, openai_data = post_openai_json("/responses", openai_payload)
+
+        if status_code < 200 or status_code >= 300:
+            return json_response({"error": "OpenAI API request failed.", "details": openai_data}, status_code)
+
+        output_text = extract_openai_output_text(openai_data)
+        if not output_text:
+            raise ApiError(502, "OpenAI response did not include output text.")
+
+        try:
+            result = json.loads(output_text)
+        except json.JSONDecodeError as error:
+            raise ApiError(502, "OpenAI response was not valid JSON.") from error
+
+        summary = result.get("summary")
+        if not isinstance(summary, str):
+            raise ApiError(502, "OpenAI response did not include a summary.")
+
+        return json_response({"bucket": bucket, "summary": summary})
     except ApiError as error:
         return json_response({"error": error.message}, error.status_code)
 
