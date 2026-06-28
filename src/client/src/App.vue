@@ -30,6 +30,7 @@ import {
   searchByPrompt,
   type SimilarTrackItem,
 } from "@/lib/cyanite"
+import { jamendoMp3Url, toJamendoId, type PlayableTrack } from "@/lib/audio"
 import { fetchJamendoTracks, type JamendoTrack } from "@/lib/jamendo"
 import {
   generateSimilarTrackSummary,
@@ -72,30 +73,64 @@ const trackExplanations = ref<Record<string, string>>({})
 const trackColorMap = ref<Record<string, string>>({})
 const hoveredTrackId = ref<string | null>(null)
 const playingJamendoId = ref<string | null>(null)
+const audioError = ref("")
 let audioEl: HTMLAudioElement | null = null
+let audioRequestId = 0
 const jamendoNames = ref<Map<string, JamendoTrack>>(new Map())
 
-function toggleAudio(jamendoTrackId: string, event: MouseEvent) {
-  event.stopPropagation()
-  if (playingJamendoId.value === jamendoTrackId) {
-    audioEl?.pause()
-    playingJamendoId.value = null
-    return
-  }
+function stopAudio() {
+  audioRequestId += 1
   if (audioEl) {
     audioEl.pause()
+    audioEl.removeAttribute("src")
+    audioEl.load()
     audioEl = null
   }
+  playingJamendoId.value = null
+}
+
+function resetAudioIfCurrent(requestId: number, audio: HTMLAudioElement) {
+  if (requestId !== audioRequestId || audioEl !== audio) return
+  audioEl = null
+  playingJamendoId.value = null
+}
+
+function toggleAudio(track: PlayableTrack, event: MouseEvent) {
+  event.stopPropagation()
+  const jamendoTrackId = toJamendoId(track)
+  if (!jamendoTrackId) {
+    audioError.value = "No Jamendo audio is available for this track."
+    return
+  }
+
+  if (playingJamendoId.value === jamendoTrackId) {
+    stopAudio()
+    return
+  }
+
+  stopAudio()
+  audioError.value = ""
+
+  const requestId = audioRequestId + 1
+  audioRequestId = requestId
   playingJamendoId.value = jamendoTrackId
-  audioEl = new Audio(`https://prod-1.storage.jamendo.com/download/track/${jamendoTrackId}/mp32/`)
-  audioEl.addEventListener("ended", () => { playingJamendoId.value = null })
-  audioEl.play().catch(() => { playingJamendoId.value = null })
+  const nextAudio = new Audio(jamendoMp3Url(jamendoTrackId))
+  audioEl = nextAudio
+  nextAudio.addEventListener("ended", () => resetAudioIfCurrent(requestId, nextAudio))
+  nextAudio.addEventListener("error", () => {
+    if (requestId !== audioRequestId) return
+    audioError.value = `Could not load audio for track ${jamendoTrackId}.`
+    resetAudioIfCurrent(requestId, nextAudio)
+  })
+  nextAudio.play().catch(() => {
+    if (requestId !== audioRequestId) return
+    audioError.value = `Could not play audio for track ${jamendoTrackId}.`
+    resetAudioIfCurrent(requestId, nextAudio)
+  })
 }
 
 function handleSimilarPlayClick(item: SimilarTrackItem, event: MouseEvent) {
-  event.stopPropagation()
-  const jamendoId = getSimilarTrackJamendoId(item)
-  if (jamendoId) toggleAudio(jamendoId, event)
+  toggleAudio(item, event)
 }
 
 function handleColorMap(map: Record<string, string>) {
@@ -184,8 +219,8 @@ function selectUser(user: User) {
   currentSeedSummaries = []
   promptHistory.value = []
   trackExplanations.value = {}
-  if (audioEl) { audioEl.pause(); audioEl = null }
-  playingJamendoId.value = null
+  audioError.value = ""
+  stopAudio()
   clearModelOutput()
 }
 
@@ -213,23 +248,16 @@ function toggleSeedTrack(trackId: string) {
   similarError.value = ""
 }
 
-function extractJamendoIdFromTitle(title: string | undefined | null): string | null {
-  const match = title?.match(/^(\d+)\.mp3$/i)
-  return match ? match[1] : null
-}
-
 function getSimilarTrackLocalMatch(item: SimilarTrackItem) {
   const byCyanite = tracksByCyaniteId.get(item.track.id)
   if (byCyanite) return byCyanite
-  const jamendoId = extractJamendoIdFromTitle(item.track.title)
+  const jamendoId = toJamendoId(item.track)
   if (jamendoId) return tracksById.get(jamendoId)
   return undefined
 }
 
 function getSimilarTrackJamendoId(item: SimilarTrackItem): string | null {
-  const local = getSimilarTrackLocalMatch(item)
-  if (local) return local.track_id
-  return extractJamendoIdFromTitle(item.track.title)
+  return toJamendoId(item)
 }
 
 function getSimilarTrackTitle(item: SimilarTrackItem) {
@@ -626,6 +654,14 @@ function formatDuration(seconds: number) {
                 <span>{{ similarError }}</span>
               </div>
 
+              <div
+                v-if="audioError"
+                class="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+              >
+                <AlertCircle class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                <span>{{ audioError }}</span>
+              </div>
+
               <div v-if="similarTracks.length" class="space-y-2">
                 <div
                   v-if="chatError"
@@ -633,6 +669,10 @@ function formatDuration(seconds: number) {
                 >
                   <AlertCircle class="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                   <span>{{ chatError }}</span>
+                </div>
+                <div class="rounded-md border bg-muted/30 p-3">
+                  <div class="text-sm font-medium text-foreground">Recommendation summary</div>
+                  <p class="mt-1 text-sm text-muted-foreground">No summary yet.</p>
                 </div>
                 <div class="flex gap-2">
                   <input
